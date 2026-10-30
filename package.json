@@ -1,0 +1,73 @@
+{
+  "name": "modmatrix-launcher",
+  "version": "1.0.0",
+  "description": "MatrixL, лаунчер Minecraft с каталогом модов",
+  "main": "src/main.js",
+  "author": "MatrixL",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "rcedit": "^4.0.1"
+  },
+  "build": {
+    "appId": "app.modmatrix.launcher",
+    "productName": "MatrixL",
+    "directories": {
+      "output": "dist"
+    },
+    "afterPack": "build/afterPack.js",
+    "files": [
+      "src/**/*",
+      "site/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MatrixL",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "language": "1049",
+      "artifactName": "MatrixL-Setup-${version}.exe",
+      "include": "build/installer.nsh"
+    },
+    "portable": {
+      "artifactName": "MatrixL-portable.exe"
+    }
+  }
+}
