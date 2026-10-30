@@ -1,0 +1,36 @@
+name: Build MatrixL.exe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Ключ CurseForge из секрета
+        shell: bash
+        env:
+          CF_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: |
+          if [ -n "$CF_KEY" ]; then printf "module.exports = '%s';\n" "$CF_KEY" > src/curseforge-key.js; fi
+      - run: npm install
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatrixL-windows
+          path: |
+            dist/*.exe
+      - name: Релиз на GitHub
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/MatrixL-Setup-*.exe
+            dist/MatrixL-portable.exe
+          generate_release_notes: true
