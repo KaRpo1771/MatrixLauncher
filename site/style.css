@@ -355,10 +355,6 @@ code{background:var(--surface-2);border:1px solid var(--line);border-radius:2px;
   @keyframes toast-in{from{transform:translate(-50%,8px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
 }
 
-footer.site-foot{border-top:2px solid var(--line-hard);background:var(--surface);padding:24px 28px;font-size:13.5px;color:var(--muted)}
-.foot-grid{max-width:1140px;margin:0 auto;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
-.foot-grid a{color:var(--muted)}
-.foot-grid a:hover{color:var(--accent)}
 
 /* ============================================================
    Адаптив
@@ -530,7 +526,6 @@ html{scroll-behavior:smooth}
 /* поля и подвал */
 select{appearance:none;-webkit-appearance:none;padding-right:34px;background-repeat:no-repeat;background-position:right 12px center;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2397a1b3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
-footer.site-foot{border-top:1px solid var(--line);background:color-mix(in srgb,var(--bg-0) 70%,transparent)}
 .m-head{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 9%,transparent),transparent)}
 
 /* плавное появление */
@@ -689,7 +684,6 @@ body{background:var(--bg-0)!important}
 .nav-count{background:var(--surface-2);border-radius:var(--radius)}
 .side-btn{border-radius:var(--radius);background:var(--surface-2)}
 .side-btn.primary{background:var(--accent);color:var(--accent-ink)}
-footer.site-foot{background:var(--surface)}
 
 /* поверхности */
 .panel,.card,.quick-card,.feature-card,.news-card,.setting-card,.state,.skeleton,.lc-card,.adm-row{
@@ -727,8 +721,7 @@ progress{height:8px;border-radius:2px;accent-color:var(--accent)}
    ============================================================ */
 .lc-home .content{padding:14px 18px}
 .lc-home .content-wrap{max-width:none}
-.lc-home footer.site-foot{display:none}
-.lc-stage{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:6px;
+.lc-home .lc-stage{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:6px;
   height:calc(100vh - 58px - 28px);min-height:520px;background:var(--bg-0);isolation:isolate;display:flex;flex-direction:column}
 
 /* фон: скриншоты игры с плавной сменой */
@@ -1081,6 +1074,7 @@ dialog.fav-pick{width:min(440px,calc(100vw - 24px))}
   background:#0b0b0b;border-bottom:1px solid var(--line);-webkit-app-region:drag;user-select:none}
 .titlebar img{width:18px;height:18px;border-radius:4px;pointer-events:none}
 .tb-title{font:600 13px "Space Grotesk",sans-serif;letter-spacing:.04em;color:var(--text)}
+.tb-ver{font:500 10.5px "IBM Plex Sans",sans-serif;color:var(--text);opacity:.35;margin-left:-2px;letter-spacing:.02em}
 .tb-space{flex:1}
 .tb-btn{-webkit-app-region:no-drag;width:46px;height:36px;display:grid;place-items:center;border:0;background:transparent;color:var(--text);cursor:pointer;transition:background .15s}
 .tb-btn svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.1}
@@ -1292,4 +1286,6 @@ html{overflow-x:hidden}
   .lc-slide.on{animation:none!important}
 }
 
-.topbar,footer.site-foot{flex:none}
+.topbar,
+.lang-seg{display:inline-flex;gap:6px}
+.lang-seg .btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}

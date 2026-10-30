@@ -1460,6 +1460,14 @@ function renderSettingsPage(){
     <p class="page-lede">Настройки хранятся на этом компьютере и на данные модов не влияют.</p>
     <div class="settings-grid">
       <div class="setting-card">
+        <h3>Язык интерфейса</h3>
+        <p>Язык лаунчера: русский или английский.</p>
+        <div class="lang-seg" id="uiLangSeg">
+          <button type="button" class="btn" data-ui="ru" aria-pressed="${window.I18N.lang()==="ru"}">RU</button>
+          <button type="button" class="btn" data-ui="en" aria-pressed="${window.I18N.lang()==="en"}">ENG</button>
+        </div>
+      </div>
+      <div class="setting-card">
         <h3>Цветовая тема</h3>
         <p>Фон всегда тёмный, меняется только цвет акцентов.</p>
         <div class="swatches" id="themeSwatches">
@@ -1514,6 +1522,10 @@ function renderSettingsPage(){
       </div>
     </div>
   `;
+
+  $("uiLangSeg").querySelectorAll("button").forEach(b=> b.addEventListener("click", ()=>{
+    if(b.dataset.ui !== window.I18N.lang()) window.I18N.set(b.dataset.ui);
+  }));
 
   const seg = $("themeSwatches");
   seg.querySelectorAll(".swatch").forEach(b=>{

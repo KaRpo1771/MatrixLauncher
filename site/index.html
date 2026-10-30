@@ -13,7 +13,7 @@
 </head>
 <body>
 <div class="titlebar" id="titlebar" aria-label="Заголовок окна">
-  <img src="logo.png" alt="" width="18" height="18"><span class="tb-title">MatrixL</span>
+  <img src="logo.png" alt="" width="18" height="18"><span class="tb-title">MatrixL</span><span class="tb-ver" id="tbVer">v1.0.3</span>
   <span class="tb-space"></span>
   <button type="button" class="tb-btn" id="tbMin" aria-label="Свернуть окно" title="Свернуть"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5h8"/></svg></button>
   <button type="button" class="tb-btn" id="tbMax" aria-label="Развернуть окно" title="Развернуть"><svg viewBox="0 0 12 12" aria-hidden="true"><rect class="tb-r" x="1.5" y="1.5" width="9" height="9"/><path class="tb-r2" d="M3.5 3.5V1.5h7v7h-2"/></svg></button>
@@ -81,17 +81,6 @@
 
     <main class="content"><div class="content-wrap" id="content"></div></main>
 
-    <footer class="site-foot">
-      <div class="foot-grid">
-        <span>MatrixL</span>
-        <span>
-          <a href="https://modrinth.com" target="_blank" rel="noopener">Modrinth</a> ·
-          <a href="https://www.curseforge.com/minecraft" target="_blank" rel="noopener">CurseForge</a> ·
-          <a href="https://hangar.papermc.io" target="_blank" rel="noopener">Hangar</a> ·
-          <a href="https://www.spigotmc.org" target="_blank" rel="noopener">SpigotMC</a>
-        </span>
-      </div>
-    </footer>
   </div>
 </div>
 
@@ -110,6 +99,7 @@
 
 <div class="toast" id="toast" hidden role="status"></div>
 
+<script src="i18n.js"></script>
 <script src="ui.js" defer></script>
 <script src="compat.js" defer></script>
 <script src="script.js" defer></script>
