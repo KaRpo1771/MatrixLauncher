@@ -43,8 +43,8 @@ Windows SmartScreen может предупредить о неизвестно�
       core.js               версии Minecraft, загрузчики, Java, моды, сборки, OptiFine
       accounts.js           аккаунты: Microsoft, Ely.by, обычный
       discord.js            Rich Presence
-      ms-app.js             ID приложения Microsoft (не секрет)
-      discord-app.js        ID приложения Discord (не секрет)
+      ms-app.js             ID приложения Microsoft
+      discord-app.js        ID приложения Discord
       discord-logo.js       необязательная ссылка на картинку для статуса Discord
       curseforge-key.example.js   шаблон ключа CurseForge
       preload.js            безопасный мост между окном и ядром
@@ -52,55 +52,3 @@ Windows SmartScreen может предупредить о неизвестно�
     build/                  иконки и картинки установщика, настройки NSIS
     discord-assets/logo.png картинка для Art Assets в Discord
     .github/workflows/      сборка .exe и публикация релиза
-
-## Сборка из исходников
-Нужен Windows и Node.js 20+.
-
-    git clone <адрес репозитория>
-    cd modmatrix-launcher
-    copy src\curseforge-key.example.js src\curseforge-key.js   (впишите свой ключ, без него CurseForge отключён)
-    # либо задайте переменную окружения CURSEFORGE_API_KEY при запуске `npm start`
-    npm install
-    npm start            запуск без сборки
-    npm run dist         сборка .exe (или build.bat)
-
-Результат в `dist/`: `MatrixL-portable.exe` и `MatrixL-Setup-<версия>.exe`.
-
-## Как выпустить релиз
-1. Поднимите `version` в `package.json`.
-2. Закоммитьте и создайте тег: `git tag v1.0.0 && git push origin v1.0.0`.
-3. GitHub Actions соберёт .exe на Windows и сам прикрепит их к новому релизу на странице Releases.
-4. Ключ CurseForge добавьте один раз: Settings → Secrets and variables → Actions → New secret с именем `CURSEFORGE_API_KEY`.
-
-Собрать без релиза можно вручную: вкладка Actions → Build MatrixL.exe → Run workflow, файлы будут в артефактах.
-
-## Вход через Microsoft
-Пользователь нажимает «Войти через Microsoft», в браузере вводит логин и пароль, после чего лаунчер входит в аккаунт сам. Ничего вставлять не нужно.
-
-Для разработчика (один раз): ID приложения Microsoft Entra лежит в `src/ms-app.js`. Если форкаете проект, зарегистрируйте своё приложение:
-1. portal.azure.com → Microsoft Entra ID → App registrations → New registration, учётные записи «Personal Microsoft accounts» (в манифесте `signInAudience` = `AzureADandPersonalMicrosoftAccount`, `requestedAccessTokenVersion` = 2).
-2. Authentication → платформа «Mobile and desktop applications» → redirect URI `http://localhost`.
-3. Права только `XboxLive.signin` и `offline_access`.
-4. Доступ к API Minecraft одобряет Mojang: https://aka.ms/AppRegInfo. Пока одобрения нет, вход заканчивается ошибкой 403.
-5. Впишите Application (client) ID в `src/ms-app.js`.
-
-## Где лежат данные
-`%APPDATA%\modmatrix-launcher\`, `accounts.json`, `settings.json`; игра и установки, подпапка `minecraft\`.
-Аккаунты и установки из прежней версии лаунчера подхватываются автоматически.
-
-## Ограничения
-- Серверные плагины из лаунчера не устанавливаются, только моды и сборки Modrinth. 
-- Forge поддерживается для Minecraft 1.7.10 и новее (проверялась установка на 1.12.2), NeoForge, для 1.20.2 и новее. Forge ставится официальным установщиком, ему нужен интернет.
-- Обычный (офлайн) аккаунт не работает на серверах с проверкой лицензии.
-
-## Статус в Discord
-Лаунчер показывает в профиле Discord, что вы делаете: в каталогах «Каталог модов | 1.12.2» (версия из фильтра), на главной выбранный экземпляр, при установке и в игре подробности и таймер.
-ID приложения (1565489605833265312) встроен в `src/discord-app.js`, в «Настройки → Статус в Discord» остаётся только переключатель.
-Картинка в статусе: загрузите `discord-assets/logo.png` в Discord Developer Portal → Rich Presence → Art Assets под ключом `logo`, либо впишите прямую https-ссылку на картинку в `src/discord-logo.js`.
-Работает с десктопным Discord, который запущен на том же компьютере.
-
-## Безопасность и секреты
-- Реальный ключ CurseForge **не хранится в репозитории**: файл `src/curseforge-key.js` в `.gitignore`, в git лежит только шаблон `curseforge-key.example.js`. В GitHub Actions ключ подставляется из секрета `CURSEFORGE_API_KEY`.
-- ID приложений Microsoft и Discord (`ms-app.js`, `discord-app.js`) это публичные идентификаторы, не секреты.
-- Пароли и токены аккаунтов лежат только на компьютере пользователя в зашифрованном виде и в репозиторий не попадают.
-- Ключ, вшитый в готовый `.exe`, технически можно достать из установленного приложения. Если это важно, ограничьте ключ на стороне CurseForge или вынесите запросы на свой прокси-сервер.
