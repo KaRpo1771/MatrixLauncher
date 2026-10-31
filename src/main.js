@@ -7,7 +7,8 @@ const core = require('./core');
 const accounts = require('./accounts');
 let CURSEFORGE_KEY = process.env.CURSEFORGE_API_KEY || '';
 try { CURSEFORGE_KEY = require('./curseforge-key') || CURSEFORGE_KEY; } catch { /* файла нет (чистый клон репозитория): CurseForge будет отключён */ }
-const DISCORD_APP_ID = require('./discord-app');
+let DISCORD_APP_ID = process.env.DISCORD_APP_ID || '';
+try { DISCORD_APP_ID = require('./discord-app') || DISCORD_APP_ID; } catch {}
 const { DiscordPresence } = require('./discord');
 
 // название продукта сменилось на MatrixL, данные (аккаунты, экземпляры) остаются в прежней папке
@@ -95,6 +96,19 @@ function registerIpc() {
     return { started: true };
   });
   handle('mc:msCancel', () => { accounts.msCancel(); return true; });
+
+  /* --- скин и плащ выбранного аккаунта --- */
+  handle('skin:head', id => accounts.skinHead(String(id || '')));
+  handle('skin:profile', id => accounts.skinProfile(String(id || '')));
+  handle('skin:upload', async ({ id, variant } = {}) => {
+    const r = await dialog.showOpenDialog(win, { title: 'Скин Minecraft', properties: ['openFile'], filters: [{ name: 'Картинки', extensions: ['png'] }] });
+    if (r.canceled || !r.filePaths.length) return null;
+    const file = r.filePaths[0];
+    if (fs.statSync(file).size > 256 * 1024) throw new Error('Файл скина слишком большой');
+    return accounts.skinUpload(String(id || ''), fs.readFileSync(file), variant === 'slim' ? 'slim' : 'classic');
+  });
+  handle('skin:reset', id => accounts.skinReset(String(id || '')));
+  handle('skin:cape', ({ id, capeId } = {}) => accounts.capeSet(String(id || ''), capeId ? String(capeId) : null));
 
   /* --- своя шапка окна: «свернуть», «развернуть» и «закрыть» --- */
   handle('win:toggle', () => { if (!win) return false; if (win.isMaximized()) win.unmaximize(); else win.maximize(); return win.isMaximized(); });

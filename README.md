@@ -7,6 +7,7 @@
   - **Ely.by**, в игре и на серверах Ely.by будет ваш скин (подключается `authlib-injector`, скачивается автоматически при первом запуске);
   - **Microsoft**, лицензионный аккаунт (вход через страницу Microsoft, как в других лаунчерах);
   - **обычный**, «оффлайн», по нику.
+  Рядом с ником показывается голова вашего скина, а шестерёнка рядом открывает окно «Скин и плащ»: у аккаунта Microsoft скин и плащ меняются прямо в лаунчере, у Ely.by они меняются на сайте.
   Пароль Ely.by лаунчер не хранит, токены лежат в зашифрованном виде (DPAPI/Keychain).
 - **Главная страница = лаунчер**: фон из скриншотов игры, «Играть» справа снизу, «Настройки экземпляра» слева.
 - **Скачивание версий Minecraft**: релизы и снапшоты, нужная Java, автоматически. Загрузчик (Vanilla / Fabric / Quilt / Forge / NeoForge) выбирается в окне создания и позже в «Настройках экземпляра»; показываются только те, что существуют для выбранной версии (для 1.12.2, только Forge). Для каждого загрузчика предлагается **рекомендуемая версия** (у Forge, из официальных promotions, у Fabric/Quilt, последняя стабильная), можно выбрать и другую.
@@ -36,15 +37,15 @@
 Windows SmartScreen может предупредить о неизвестном издателе, потому что файл не подписан сертификатом. Нажмите «Подробнее» → «Выполнить в любом случае».
 
 ## Исходный код
-Лаунчер написан на Electron (Node.js) без фреймворков. Лицензия MIT.
+Лаунчер написан на Electron (Node.js) без фреймворков. Лицензия GPL-3.0: копии и изменённые версии нужно распространять под той же лицензией с открытым исходным кодом.
 
     src/                    главный процесс Electron
       main.js               окно, IPC, статус Discord, запуск игры
       core.js               версии Minecraft, загрузчики, Java, моды, сборки, OptiFine
-      accounts.js           аккаунты: Microsoft, Ely.by, обычный
+      accounts.js           аккаунты: Microsoft, Ely.by, обычный; скины и плащи
       discord.js            Rich Presence
-      ms-app.js             ID приложения Microsoft
-      discord-app.js        ID приложения Discord
+      ms-app.example.js     шаблон ID приложения Microsoft
+      discord-app.example.js      шаблон ID приложения Discord
       discord-logo.js       необязательная ссылка на картинку для статуса Discord
       curseforge-key.example.js   шаблон ключа CurseForge
       preload.js            безопасный мост между окном и ядром
@@ -52,3 +53,17 @@ Windows SmartScreen может предупредить о неизвестно�
     build/                  иконки и картинки установщика, настройки NSIS
     discord-assets/logo.png картинка для Art Assets в Discord
     .github/workflows/      сборка .exe и публикация релиза
+
+## Сборка из исходников
+Нужен Windows и Node.js 20+.
+
+    npm install
+    npm start
+    npm run dist
+
+Перед запуском скопируйте шаблоны и впишите свои значения: `src/ms-app.example.js` в `src/ms-app.js` (ID приложения Microsoft Entra), `src/discord-app.example.js` в `src/discord-app.js` (ID приложения Discord) и `src/curseforge-key.example.js` в `src/curseforge-key.js` (ключ CurseForge). Эти три файла не попадают в git. Вход через Microsoft требует своего приложения, одобренного Mojang (aka.ms/AppRegInfo).
+
+Для релиза на GitHub добавьте секреты `CURSEFORGE_API_KEY`, `MS_CLIENT_ID` и `DISCORD_APP_ID` (Settings, Secrets and variables, Actions). Релиз создаётся тегом: `git tag v1.1.0 && git push origin v1.1.0`.
+
+## Лицензия и торговые знаки
+Исходный код распространяется по лицензии GNU GPL версии 3 (файл LICENSE). Название MatrixL, логотип и картинки в папках `build` и `discord-assets` лицензией не покрываются, это отличительные знаки проекта: в изменённых версиях их нужно заменить. Minecraft является торговой маркой Mojang AB, проект не связан с Mojang и Microsoft.

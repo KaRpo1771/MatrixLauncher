@@ -11,9 +11,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const UA = 'ModMatrix-Launcher/1.0';
+const UA = 'MatrixL-Launcher/1.1';
 let FILE = null;
 let SETTINGS = null;
+let HEADS = null;
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJson(file, data) {
@@ -26,6 +27,7 @@ function writeJson(file, data) {
 function init(dir) {
   FILE = path.join(dir, 'accounts.json');
   SETTINGS = path.join(dir, 'settings.json');
+  HEADS = path.join(dir, 'heads.json');
   migrate(dir);
 }
 
@@ -93,6 +95,7 @@ function select(id) {
   return mutate(d => { if (!d.accounts.some(a => a.id === id)) throw new Error('Аккаунт не найден'); d.selected = id; return view(d); });
 }
 function remove(id) {
+  tokMem.delete(id); headMem.delete(id);
   return mutate(d => {
     d.accounts = d.accounts.filter(a => a.id !== id);
     if (d.selected === id) d.selected = d.accounts[0] ? d.accounts[0].id : null;
@@ -200,7 +203,7 @@ async function msRefresh(clientId, refreshToken) {
   const x = await xboxChain(t.json.access_token);
   return { ...x, refresh: t.json.refresh_token || refreshToken };
 }
-const MS_BUILTIN = (() => { try { return require('./ms-app'); } catch { return ''; } })();
+const MS_BUILTIN = (() => { try { return require('./ms-app') || process.env.MS_CLIENT_ID || ''; } catch { return process.env.MS_CLIENT_ID || ''; } })();
 function msClientId() { return String(getSettings().msClientId || MS_BUILTIN || '').trim(); }
 
 const esc = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -279,6 +282,178 @@ async function msStart() {
   return { info: { url }, wait };
 }
 
+
+/* ============================================================
+   Скины и плащи.
+   • Microsoft: смена скина и плаща прямо из лаунчера (Minecraft Services API);
+   • Ely.by   : скин и плащ показываются, менять их нужно на сайте Ely.by;
+   • обычный  : своих скинов у оффлайн-аккаунта нет.
+   Картинки скачиваются в главном процессе и отдаются окну как data: URL,
+   поэтому окну не нужен доступ к чужим серверам.
+   ============================================================ */
+const MCAPI = 'https://api.minecraftservices.com';
+const tokMem = new Map();    // id → { token, exp }: токен Minecraft живёт долго, не обновляем его на каждый клик
+const headMem = new Map();   // id → { t, v: { skin, slim } }
+const texMem = new Map();    // url → data: URL
+
+const isPng = b => b.length > 24 && b.readUInt32BE(0) === 0x89504e47 && b.readUInt32BE(4) === 0x0d0a1a0a;
+function pngSize(b) { return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) }; }
+
+/* Скачиваем только с серверов текстур Mojang и Ely.by */
+async function fetchTexture(url) {
+  if (!url) return null;
+  url = String(url).replace(/^http:/i, 'https:');
+  let u; try { u = new URL(url); } catch { return null; }
+  if (!(u.hostname === 'textures.minecraft.net' || u.hostname === 'ely.by' || u.hostname.endsWith('.ely.by'))) return null;
+  if (texMem.has(url)) return texMem.get(url);
+  const r = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!r.ok) return null;
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > 512 * 1024 || !isPng(buf)) return null;
+  const data = 'data:image/png;base64,' + buf.toString('base64');
+  if (texMem.size > 200) texMem.clear();
+  texMem.set(url, data);
+  return data;
+}
+
+/* Скин и плащ без входа: открытые сервисы Mojang и Ely.by. Пусто, если скина нет */
+async function publicTextures(acc) {
+  const empty = { skin: null, slim: false, cape: null };
+  if (acc.type === 'ely') {
+    const r = await fetch('https://skinsystem.ely.by/textures/' + encodeURIComponent(acc.name), { headers: { 'User-Agent': UA } });
+    if (r.status === 404 || r.status === 204) return empty;
+    if (!r.ok) throw new Error('Ely.by: не удалось получить скин (' + r.status + ')');
+    const j = await r.json().catch(() => ({}));
+    return { skin: j.SKIN && j.SKIN.url, slim: !!(j.SKIN && j.SKIN.metadata && j.SKIN.metadata.model === 'slim'), cape: j.CAPE && j.CAPE.url };
+  }
+  const r = await fetch('https://sessionserver.mojang.com/session/minecraft/profile/' + String(acc.uuid).replace(/-/g, ''), { headers: { 'User-Agent': UA } });
+  if (r.status === 404 || r.status === 204) return empty;
+  if (r.status === 429) throw new Error('Слишком много запросов к Mojang, подождите минуту');
+  if (!r.ok) throw new Error('Не удалось получить скин (' + r.status + ')');
+  const j = await r.json().catch(() => ({}));
+  const prop = (j.properties || []).find(x => x.name === 'textures');
+  let t = {}; try { t = JSON.parse(Buffer.from(prop.value, 'base64').toString('utf8')).textures || {}; } catch { /* нет текстур */ }
+  return { skin: t.SKIN && t.SKIN.url, slim: !!(t.SKIN && t.SKIN.metadata && t.SKIN.metadata.model === 'slim'), cape: t.CAPE && t.CAPE.url };
+}
+
+/* Последняя известная «голова» хранится на диске, чтобы значок не пропадал без сети */
+function headDisk(id, v) {
+  const all = readJson(HEADS, {});
+  if (v === undefined) return all[id] || null;
+  if (v) all[id] = v; else delete all[id];
+  try { writeJson(HEADS, all); } catch { /* не критично */ }
+  return v;
+}
+function rememberHead(id, v) { headMem.set(id, { t: Date.now(), v }); headDisk(id, v); }
+
+function findAcc(id) {
+  const acc = load().accounts.find(a => a.id === id);
+  if (!acc) throw new Error('Аккаунт не найден');
+  return acc;
+}
+
+/* Значок рядом с ником: скин (картинка 64×64 или 64×32) и тип рук */
+async function skinHead(id) {
+  const acc = findAcc(id);
+  if (acc.type === 'offline') return { skin: null, slim: false };
+  const hit = headMem.get(id);
+  if (hit && Date.now() - hit.t < 5 * 60 * 1000) return hit.v;
+  try {
+    const t = await publicTextures(acc);
+    const v = { skin: t.skin ? await fetchTexture(t.skin) : null, slim: !!t.slim };
+    rememberHead(id, v);
+    return v;
+  } catch (e) {
+    const old = (hit && hit.v) || headDisk(id);
+    if (old) return old;
+    throw e;
+  }
+}
+
+/* --- вход Microsoft для изменения скина --- */
+async function msSession(id, force) {
+  const m = tokMem.get(id);
+  if (!force && m && m.exp > Date.now()) return m;
+  const acc = findAcc(id);
+  if (acc.type !== 'microsoft') throw new Error('Менять скин из лаунчера можно только у аккаунта Microsoft');
+  const r = await msRefresh(msClientId(), unseal(acc.refresh));
+  mutate(x => { const a = x.accounts.find(v => v.id === id); if (a) { a.refresh = seal(r.refresh); a.name = r.profile.name; } });
+  const e = { token: r.mcToken, exp: Date.now() + 20 * 60 * 1000, profile: r.profile };
+  tokMem.set(id, e);
+  return e;
+}
+function mcError(status, j) {
+  const m = String((j && (j.errorMessage || j.error)) || '');
+  if (status === 429) return 'Слишком много запросов к Mojang, подождите минуту';
+  if (status === 401 || status === 403) return 'Mojang отклонил запрос, войдите в аккаунт Microsoft заново';
+  if (status === 400) return 'Mojang не принял файл' + (m ? ': ' + m.slice(0, 160) : '');
+  return 'Mojang: ' + (m.slice(0, 160) || 'ошибка ' + status);
+}
+async function mcApi(id, method, pathname, { json, form } = {}) {
+  let s = await msSession(id);
+  const go = () => fetch(MCAPI + pathname, {
+    method, body: json ? JSON.stringify(json) : form,
+    headers: { Authorization: 'Bearer ' + s.token, Accept: 'application/json', 'User-Agent': UA, ...(json ? { 'Content-Type': 'application/json' } : {}) }
+  });
+  let r = await go();
+  if (r.status === 401) { s = await msSession(id, true); r = await go(); }
+  const j = r.status === 204 ? null : await r.json().catch(() => null);
+  if (!r.ok) throw new Error(mcError(r.status, j));
+  return j;
+}
+
+/* Всё, что нужно окну «Скин и плащ» */
+async function skinProfile(id) {
+  const acc = findAcc(id);
+  const base = { id, type: acc.type, name: acc.name };
+  if (acc.type === 'offline') return { ...base, canEdit: false, skin: null, slim: false, capes: [] };
+  if (acc.type === 'microsoft') {
+    try {
+      const p = await mcApi(id, 'GET', '/minecraft/profile');
+      const sk = (p.skins || []).find(x => x.state === 'ACTIVE') || null;
+      const slim = !!sk && String(sk.variant).toUpperCase() === 'SLIM';
+      const skin = sk ? await fetchTexture(sk.url) : null;
+      const capes = await Promise.all((p.capes || []).map(async c => ({ id: c.id, alias: c.alias || '', active: c.state === 'ACTIVE', img: await fetchTexture(c.url) })));
+      rememberHead(id, { skin, slim });
+      return { ...base, canEdit: true, skin, slim, capes };
+    } catch (e) {
+      // без входа в Mojang показываем то, что видно всем, но менять нельзя
+      const t = await publicTextures(acc).catch(() => null);
+      if (!t) throw e;
+      const cape = t.cape ? await fetchTexture(t.cape) : null;
+      return { ...base, canEdit: false, warning: e.message, skin: t.skin ? await fetchTexture(t.skin) : null, slim: !!t.slim, capes: cape ? [{ id: 'current', alias: '', active: true, img: cape }] : [] };
+    }
+  }
+  const t = await publicTextures(acc);
+  const skin = t.skin ? await fetchTexture(t.skin) : null;
+  const cape = t.cape ? await fetchTexture(t.cape) : null;
+  rememberHead(id, { skin, slim: !!t.slim });
+  return { ...base, canEdit: false, web: 'https://ely.by/skins', skin, slim: !!t.slim, capes: cape ? [{ id: 'current', alias: '', active: true, img: cape }] : [] };
+}
+
+/* Загрузка скина из файла PNG (64×64 или 64×32) */
+async function skinUpload(id, buf, variant) {
+  if (!Buffer.isBuffer(buf) || !isPng(buf)) throw new Error('Нужен файл PNG');
+  if (buf.length > 256 * 1024) throw new Error('Файл скина слишком большой');
+  const { w, h } = pngSize(buf);
+  if (!(w === 64 && (h === 64 || h === 32))) throw new Error('Скин должен быть 64×64 или 64×32 пикселя, а в файле ' + w + '×' + h);
+  const fd = new FormData();
+  fd.append('variant', variant === 'slim' ? 'slim' : 'classic');
+  fd.append('file', new Blob([buf], { type: 'image/png' }), 'skin.png');
+  await mcApi(id, 'POST', '/minecraft/profile/skins', { form: fd });
+  return skinProfile(id);
+}
+async function skinReset(id) {
+  await mcApi(id, 'DELETE', '/minecraft/profile/skins/active');
+  return skinProfile(id);
+}
+/* capeId = null, плащ снимается */
+async function capeSet(id, capeId) {
+  if (capeId) await mcApi(id, 'PUT', '/minecraft/profile/capes/active', { json: { capeId: String(capeId) } });
+  else await mcApi(id, 'DELETE', '/minecraft/profile/capes/active');
+  return skinProfile(id);
+}
+
 /* ---------- данные выбранного аккаунта для запуска ---------- */
 async function accountForLaunch() {
   const d = load();
@@ -305,5 +480,6 @@ async function accountForLaunch() {
 module.exports = {
   init, getSettings, setSettings, publicSettings, getCurseKey,
   list, select, remove, addOffline, elyLogin, msStart, msCancel, accountForLaunch,
+  skinHead, skinProfile, skinUpload, skinReset, capeSet,
   _t: { offlineUuid, seal, unseal, elyError, migrate }
 };

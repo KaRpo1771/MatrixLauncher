@@ -12,7 +12,7 @@
 
   const S = {
     mcs: [], instances: [], versions: null, settings: {}, sys: null, logs: [], ms: null,
-    sel: null, shots: [], shotsLoaded: false, dlg: null, timer: null, accTab: 'ely', lo: {}
+    sel: null, shots: [], shotsLoaded: false, dlg: null, timer: null, accTab: 'ely', lo: {}, heads: {}, sk: null
   };
   try { S.sel = localStorage.getItem('modmatrix:sel'); } catch (e) { /* без хранилища */ }
 
@@ -60,26 +60,51 @@
   function saveSel() { try { localStorage.setItem('modmatrix:sel', S.sel || ''); } catch (e) { /* без хранилища */ } }
   const selectedAcc = () => S.mcs.find(a => a.selected) || null;
 
-  /* ---------------- аватары: голова скина с Ely.by ---------------- */
+  /* ---------------- аватары: голова скина ----------------
+     Скин берётся в главном процессе (Mojang, Ely.by), у оффлайн-аккаунта рисуется Стив. */
+  const STEVE_PAL = { H: '#4a3020', S: '#b78a68', W: '#ffffff', E: '#3d3a8a', N: '#8d5d41', M: '#6e3f2d' };
+  const STEVE = ['HHHHHHHH', 'HHHHHHHH', 'HSSSSSSH', 'SWESSEWS', 'SSSSSSSS', 'SSSNNSSS', 'SSNMMNSS', 'SSSSSSSS'];
+  function steveHead() {
+    const c = document.createElement('canvas'); c.width = c.height = 8; c.className = 'skin-head';
+    const x = c.getContext('2d');
+    STEVE.forEach((row, y) => [...row].forEach((ch, i) => { x.fillStyle = STEVE_PAL[ch]; x.fillRect(i, y, 1, 1); }));
+    return c;
+  }
+  const loadImg = src => new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = src; });
   function avatar(a, cls) {
     const letter = esc((a ? a.name : '?')[0].toUpperCase());
-    return `<span class="acc-ava ${cls || ''}" ${a && a.type === 'ely' ? `data-skin="${esc(a.name)}"` : ''}>${letter}</span>`;
+    return `<span class="acc-ava ${cls || ''}" ${a ? `data-head="${esc(a.id)}"` : ''}>${letter}</span>`;
+  }
+  async function headCanvas(skin) {
+    if (!skin) return steveHead();
+    const img = await loadImg(skin);
+    const c = document.createElement('canvas'); c.width = c.height = 8; c.className = 'skin-head';
+    const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+    const k = img.width / 64;
+    x.drawImage(img, 8 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);            // лицо
+    x.drawImage(img, 40 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);           // второй слой (шапка)
+    return c;
+  }
+  async function paintHead(el, v) {
+    try { const c = await headCanvas(v && v.skin); el.textContent = ''; el.appendChild(c); el.dataset.done = '1'; } catch (e) { /* остаётся буква */ }
   }
   function paintSkins(root) {
-    (root || document).querySelectorAll('[data-skin]').forEach(el => {
-      if (el.dataset.done === el.dataset.skin) return;
-      el.dataset.done = el.dataset.skin;
-      const img = new Image();
-      img.onload = () => {
-        const c = document.createElement('canvas'); c.width = c.height = 8; c.className = 'skin-head';
-        const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
-        x.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8);          // лицо
-        if (img.width >= 64) x.drawImage(img, 40, 8, 8, 8, 0, 0, 8, 8); // второй слой (шапка)
-        el.textContent = ''; el.appendChild(c);
-      };
-      img.src = 'https://skinsystem.ely.by/skins/' + encodeURIComponent(el.dataset.skin) + '.png';
+    (root || document).querySelectorAll('[data-head]').forEach(async el => {
+      const id = el.dataset.head, acc = S.mcs.find(m => m.id === id);
+      if (!acc) return;
+      if (acc.type === 'offline') { paintHead(el, null); return; }
+      let h = S.heads[id];
+      if (h && h.fail && Date.now() - h.fail > 60000) h = null;      // после ошибки пробуем снова не чаще раза в минуту
+      if (!h) {
+        h = S.heads[id] = { pending: call('skin:head', id).then(v => { S.heads[id] = v; return v; }, () => { S.heads[id] = { fail: Date.now() }; return null; }) };
+      }
+      if (h.fail) return;
+      const v = h.pending ? await h.pending : h;
+      if (v) paintHead(el, v);
     });
   }
+  /* скин поменялся: обновляем значки во всех местах */
+  function setHead(id, v) { S.heads[id] = { skin: v.skin, slim: !!v.slim }; document.querySelectorAll('[data-head]').forEach(el => { if (el.dataset.head === id) paintHead(el, S.heads[id]); }); }
 
   /* ---------------- боковая панель: выбранный аккаунт ---------------- */
   function renderAccount() {
@@ -89,9 +114,13 @@
     const a = selectedAcc();
     box.innerHTML = a
       ? `<button class="acc-chip" data-act="accounts" type="button" title="Сменить аккаунт">${avatar(a)}
-           <span class="acc-meta"><b>${esc(a.name)}</b><small>${esc(TYPES[a.type] || a.type)}</small></span></button>`
+           <span class="acc-meta"><b>${esc(a.name)}</b><small>${esc(TYPES[a.type] || a.type)}</small></span></button>
+         <button class="acc-gear" data-act="skins" type="button" title="Скин и плащ" aria-label="Скин и плащ"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>`
       : '<button class="side-btn primary" data-act="accounts" type="button">Войти в аккаунт</button>';
-    box.onclick = e => { if (e.target.closest('[data-act="accounts"]')) openDlg('accounts'); };
+    box.onclick = e => {
+      if (e.target.closest('[data-act="skins"]')) openDlg('skins');
+      else if (e.target.closest('[data-act="accounts"]')) openDlg('accounts');
+    };
     paintSkins(box);
   }
 
@@ -253,7 +282,9 @@
     });
   }
   function afterAccountsChange() {
+    S.heads = Object.fromEntries(Object.entries(S.heads).filter(([id]) => S.mcs.some(m => m.id === id)));
     renderAccount();
+    if (S.dlg && S.dlg.kind === 'skins') { const a = selectedAcc(); if (a) loadSkin(a.id); else $id('lcDlg').close(); }
     if (S.dlg && S.dlg.kind === 'accounts') paintDlg();
     if (onHome()) render();
   }
@@ -406,8 +437,14 @@
     if (kind === 'create' && S.bgTask && S.bgTask.phase !== 'run') S.bgTask = null;   // прошлая установка закончена, чистая форма
     if (kind === 'settings' || kind === 'create') await reloadSys();   // актуальные сведения о ПК
     const d = ensureDlg();
+    if (kind === 'skins') {
+      const a = selectedAcc();
+      if (!a) { S.dlg = null; openDlg('accounts'); return; }
+      S.sk = { id: a.id, loading: true, data: null, error: '', busy: false };
+    }
     paintDlg();
     if (!d.open) d.showModal();
+    if (kind === 'skins') loadSkin(S.sk.id);
     // журнал: прокрутка работает только у показанного окна, поэтому, после showModal
     if (kind === 'log') { logToEnd(); requestAnimationFrame(() => { logToEnd(); setTimeout(logToEnd, 80); }); }
   }
@@ -619,6 +656,149 @@
     return `<div class="lc-list">${rows}</div>
       <h4 style="margin:6px 0 0">Добавить аккаунт</h4>
       <div class="src-tabs" role="tablist" style="margin:0">${tabs}</div>${pane}`;
+  }
+
+  /* --- скин и плащ --- */
+  function skinsBody() {
+    const k = S.sk;
+    if (!k) return '';
+    if (k.loading) return '<p class="filter-note" role="status">Загружаю скин…</p>';
+    if (!k.data) return `<div class="banner err"><b>Не удалось загрузить скин</b>${esc(k.error || '')}</div>
+      <div class="lc-install"><button class="btn" data-act="skin-reload" type="button">Повторить</button></div>`;
+    const p = k.data, busy = k.busy ? 'disabled' : '';
+    let out = '';
+    if (p.warning) out += `<div class="banner err"><b>Изменить скин сейчас нельзя</b>${esc(p.warning)}</div>`;
+    out += `<div class="sk-view" aria-label="Предпросмотр скина">
+        <figure><canvas id="skFront" class="sk-cv" aria-label="Спереди"></canvas><figcaption>Спереди</figcaption></figure>
+        <figure><canvas id="skBack" class="sk-cv" aria-label="Сзади"></canvas><figcaption>Сзади</figcaption></figure>
+      </div>`;
+    if (p.canEdit) {
+      out += `<h4 class="sk-h">Скин</h4>
+        <div class="sk-variant" role="radiogroup" aria-label="Тип рук">
+          <label><input type="radio" name="skVar" value="classic" ${p.slim ? '' : 'checked'}> Классический <span class="muted">(руки 4 пикселя)</span></label>
+          <label><input type="radio" name="skVar" value="slim" ${p.slim ? 'checked' : ''}> Тонкий <span class="muted">(руки 3 пикселя)</span></label>
+        </div>
+        <div class="lc-install">
+          <button class="btn primary" data-act="skin-pick" type="button" ${busy}>Выбрать файл скина…</button>
+          <button class="btn" data-act="skin-reset" type="button" ${busy}>Вернуть стандартный</button>
+        </div>
+        <p class="filter-note">Нужен PNG 64×64 (или 64×32). Скин появится в игре и на серверах сразу после загрузки.</p>
+        <h4 class="sk-h">Плащ</h4>`;
+      const none = !p.capes.some(c => c.active);
+      out += `<div class="sk-capes" role="radiogroup" aria-label="Плащ">
+        <button type="button" class="sk-cape ${none ? 'on' : ''}" data-act="cape-set" data-cape="" aria-pressed="${none}" ${busy}><span class="sk-cape-none">Нет</span><small>Без плаща</small></button>
+        ${p.capes.map(c => `<button type="button" class="sk-cape ${c.active ? 'on' : ''}" data-act="cape-set" data-cape="${esc(c.id)}" aria-pressed="${c.active}" ${busy}><canvas class="sk-cape-cv" data-cape-img="${esc(c.id)}" width="10" height="16"></canvas><small>${esc(c.alias || 'Плащ')}</small></button>`).join('')}
+      </div>`;
+      if (!p.capes.length) out += '<p class="filter-note">На этом аккаунте пока нет плащей. Плащи выдаёт Mojang (за события и акции), в лаунчере их получить нельзя.</p>';
+      if (k.busy) out += '<p class="filter-note" role="status">Отправляю в Mojang…</p>';
+    } else if (p.type === 'ely') {
+      out += `<p class="filter-note">Скин и плащ Ely.by меняются на сайте, а в лаунчере и игре появятся сами.</p>
+        <div class="lc-install"><a class="btn primary" href="${esc(p.web || 'https://ely.by/skins')}" target="_blank" rel="noopener">Открыть Ely.by</a>
+        <button class="btn" data-act="skin-reload" type="button">Обновить</button></div>`;
+    } else if (p.type === 'offline') {
+      out += '<p class="filter-note">У обычного (оффлайн) аккаунта своего скина нет: в игре будет стандартный. Чтобы менять скин и плащ, войдите через Microsoft.</p>';
+    } else {
+      out += '<div class="lc-install"><button class="btn" data-act="skin-reload" type="button">Повторить</button></div>';
+    }
+    return out;
+  }
+
+  /* Рисуем игрока по текстуре скина (64×64 или 64×32, в том числе HD) */
+  function drawFigure(cv, skin, cape, slim, back, scale) {
+    cv.width = 16 * scale; cv.height = 32 * scale;
+    const x = cv.getContext('2d'); x.imageSmoothingEnabled = false; x.clearRect(0, 0, cv.width, cv.height);
+    const k = skin.width / 64, legacy = skin.height < skin.width;
+    const part = (sx, sy, w, h, dx, dy, flip) => {
+      x.save();
+      if (flip) { x.translate((dx + w) * scale, 0); x.scale(-1, 1); dx = 0; }
+      x.drawImage(skin, sx * k, sy * k, w * k, h * k, dx * scale, dy * scale, w * scale, h * scale);
+      x.restore();
+    };
+    const aw = slim ? 3 : 4, ax = 4 - aw;
+    // x-координата в текстуре: спереди и сзади
+    const rArm = (oy) => [(back ? (slim ? 51 : 52) : 44), oy];
+    const lArmBase = [(back ? (slim ? 43 : 44) : 36), 52], lArmOv = [(back ? (slim ? 59 : 60) : 52), 52];
+    const arm = (right, overlay, dx) => {
+      if (right) { const [sx, sy] = rArm(overlay ? 36 : 20); part(sx, sy, aw, 12, dx, 8); }
+      else if (legacy) { const [sx, sy] = rArm(20); part(sx, sy, aw, 12, dx, 8, true); }
+      else { const [sx, sy] = overlay ? lArmOv : lArmBase; part(sx, sy, aw, 12, dx, 8); }
+    };
+    const leg = (right, overlay, dx) => {
+      if (right) part(back ? 12 : 4, overlay ? 36 : 20, 4, 12, dx, 20);
+      else if (legacy) part(back ? 12 : 4, 20, 4, 12, dx, 20, true);
+      else part(back ? (overlay ? 12 : 28) : (overlay ? 4 : 20), 52, 4, 12, dx, 20);
+    };
+    // спереди слева стоит правая рука/нога персонажа, сзади левая
+    const leftSlotRight = !back, rightSlotRight = back;
+    leg(leftSlotRight, false, 4); leg(rightSlotRight, false, 8);
+    part(back ? 32 : 20, 20, 8, 12, 4, 8);
+    if (!legacy) { leg(leftSlotRight, true, 4); leg(rightSlotRight, true, 8); part(back ? 32 : 20, 36, 8, 12, 4, 8); }
+    if (back && cape) {
+      const kc = cape.width / 64;
+      x.drawImage(cape, 1 * kc, 1 * kc, 10 * kc, 16 * kc, 3 * scale, 8 * scale, 10 * scale, 16 * scale);
+    }
+    arm(leftSlotRight, false, ax); arm(rightSlotRight, false, 12);
+    if (!legacy) { arm(leftSlotRight, true, ax); arm(rightSlotRight, true, 12); }
+    part(back ? 24 : 8, 8, 8, 8, 4, 0);
+    part(back ? 56 : 40, 8, 8, 8, 4, 0);
+  }
+  async function paintSkinPreview() {
+    const k = S.sk;
+    if (!k || !k.data) return;
+    const p = k.data, token = k;
+    try {
+      const skinSrc = p.skin || null;
+      const skinImg = skinSrc ? await loadImg(skinSrc) : await steveImage();
+      const activeCape = p.capes.find(c => c.active && c.img);
+      const capeImg = activeCape ? await loadImg(activeCape.img) : null;
+      if (S.sk !== token) return;
+      const a = $id('skFront'), b = $id('skBack');
+      if (a) drawFigure(a, skinImg, null, p.slim, false, 6);
+      if (b) drawFigure(b, skinImg, capeImg, p.slim, true, 6);
+      for (const cv of document.querySelectorAll('[data-cape-img]')) {
+        const c = p.capes.find(x => x.id === cv.dataset.capeImg);
+        if (!c || !c.img) continue;
+        const im = await loadImg(c.img); if (S.sk !== token) return;
+        const kc = im.width / 64, x = cv.getContext('2d'); x.imageSmoothingEnabled = false;
+        x.drawImage(im, 1 * kc, 1 * kc, 10 * kc, 16 * kc, 0, 0, 10, 16);
+      }
+    } catch (e) { /* картинка не загрузилась, остаётся пустой предпросмотр */ }
+  }
+  /* Стив нужен как запасной скин: в нём рисуется только голова, остальное заливается цветом */
+  function steveImage() {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    const x = c.getContext('2d');
+    const fill = (col, rx, ry, w, h) => { x.fillStyle = col; x.fillRect(rx, ry, w, h); };
+    [[8, 8, 8, 8], [24, 8, 8, 8]].forEach(([rx, ry, w, h]) => fill('#b78a68', rx, ry, w, h));
+    fill('#4a3020', 8, 8, 8, 2); fill('#4a3020', 24, 8, 8, 8);
+    fill('#3b8f8b', 20, 20, 8, 12); fill('#3b8f8b', 32, 20, 8, 12);       // тело
+    fill('#b78a68', 44, 20, 4, 12); fill('#b78a68', 52, 20, 4, 12); fill('#b78a68', 36, 52, 4, 12); fill('#b78a68', 44, 52, 4, 12);
+    fill('#3b3b8f', 4, 20, 4, 12); fill('#3b3b8f', 12, 20, 4, 12); fill('#3b3b8f', 20, 52, 4, 12); fill('#3b3b8f', 28, 52, 4, 12);
+    x.fillStyle = '#fff'; x.fillRect(9, 11, 2, 1); x.fillRect(13, 11, 2, 1);
+    x.fillStyle = '#3d3a8a'; x.fillRect(9, 11, 1, 1); x.fillRect(14, 11, 1, 1);
+    return loadImg(c.toDataURL());
+  }
+
+  async function loadSkin(id) {
+    const a = id ? S.mcs.find(m => m.id === id) : selectedAcc();
+    if (!a) { S.sk = null; if (S.dlg && S.dlg.kind === 'skins') $id('lcDlg').close(); return; }
+    const k = S.sk = { id: a.id, loading: true, data: null, error: '', busy: false };
+    if (S.dlg && S.dlg.kind === 'skins') paintDlg();
+    try { k.data = await call('skin:profile', a.id); if (k.data && k.data.skin !== undefined) setHead(a.id, k.data); }
+    catch (ex) { k.error = ex.message; }
+    k.loading = false;
+    if (S.sk === k && S.dlg && S.dlg.kind === 'skins') paintDlg();
+  }
+  /* изменение скина или плаща: одна общая обёртка */
+  async function skinChange(channel, arg, okText) {
+    const k = S.sk; if (!k || !k.data || k.busy) return;
+    k.busy = true; paintDlg();
+    try {
+      const r = await call(channel, arg);
+      if (r) { k.data = r; setHead(k.id, r); note(okText); }
+    } catch (ex) { note(ex.message); }
+    k.busy = false;
+    if (S.sk === k) paintDlg();
   }
 
   /* --- новая версия --- */
@@ -877,7 +1057,11 @@
     const d = ensureDlg();
     const k = S.dlg && S.dlg.kind;
     if (!k) return;
-    if (k === 'accounts') {
+    if (k === 'skins') {
+      const a = selectedAcc();
+      d.innerHTML = head('Скин и плащ', a ? `${a.name} · ${TYPES[a.type] || a.type}` : '') + `<div class="m-body">${skinsBody()}</div>` + foot;
+      paintSkinPreview();
+    } else if (k === 'accounts') {
       d.innerHTML = head('Аккаунты Minecraft', 'Выберите, под каким аккаунтом играть') + `<div class="m-body">${accountsBody()}</div>` + foot;
       paintSkins(d);
     } else if (k === 'create' && S.bgTask) {
@@ -951,6 +1135,17 @@
           await reloadInstances(); render(); paintDlg(); note('Загрузчик изменён');
         } catch (ex) { const st = $id('lcStat'); if (st) st.textContent = ex.message; note(ex.message); b.disabled = false; }
       }
+      else if (act === 'skins') openDlg('skins');
+      else if (act === 'skin-reload') loadSkin(S.sk && S.sk.id);
+      else if (act === 'skin-pick') {
+        const v = document.querySelector('input[name="skVar"]:checked');
+        await skinChange('skin:upload', { id: S.sk.id, variant: v ? v.value : 'classic' }, 'Скин изменён');
+      }
+      else if (act === 'skin-reset') {
+        if (!(await ask({ title: 'Вернуть стандартный скин?', text: 'Текущий скин будет заменён стандартным скином Minecraft.', ok: 'Вернуть' }))) return;
+        await skinChange('skin:reset', S.sk.id, 'Скин сброшен');
+      }
+      else if (act === 'cape-set') await skinChange('skin:cape', { id: S.sk.id, capeId: b.dataset.cape || null }, b.dataset.cape ? 'Плащ надет' : 'Плащ снят');
       else if (act === 'mc-select') { S.mcs = await call('mc:select', id); afterAccountsChange(); }
       else if (act === 'mc-remove') {
         const acc = S.mcs.find(x => x.id === id);
@@ -1354,7 +1549,10 @@
   let started = false;
   async function init() {
     if (started) return; started = true;
-    if (desktop) { wireEvents(); await loadState(); }
+    if (desktop) {
+      wireEvents(); await loadState();
+      call('app:info').then(i => { const v = $id('tbVer'); if (v && i && i.version) v.textContent = 'v' + i.version; }).catch(() => {});   // версия всегда из package.json
+    }
     renderAccount();
     if (desktop && onHome()) render();
   }
