@@ -54,16 +54,6 @@ Windows SmartScreen может предупредить о неизвестно�
     discord-assets/logo.png картинка для Art Assets в Discord
     .github/workflows/      сборка .exe и публикация релиза
 
-## Сборка из исходников
-Нужен Windows и Node.js 20+.
-
-    npm install
-    npm start
-    npm run dist
-
-Перед запуском скопируйте шаблоны и впишите свои значения: `src/ms-app.example.js` в `src/ms-app.js` (ID приложения Microsoft Entra), `src/discord-app.example.js` в `src/discord-app.js` (ID приложения Discord) и `src/curseforge-key.example.js` в `src/curseforge-key.js` (ключ CurseForge). Эти три файла не попадают в git. Вход через Microsoft требует своего приложения, одобренного Mojang (aka.ms/AppRegInfo).
-
-Для релиза на GitHub добавьте секреты `CURSEFORGE_API_KEY`, `MS_CLIENT_ID` и `DISCORD_APP_ID` (Settings, Secrets and variables, Actions). Релиз создаётся тегом: `git tag v1.1.0 && git push origin v1.1.0`.
 
 ## Лицензия и торговые знаки
 Исходный код распространяется по лицензии GNU GPL версии 3 (файл LICENSE). Название MatrixL, логотип и картинки в папках `build` и `discord-assets` лицензией не покрываются, это отличительные знаки проекта: в изменённых версиях их нужно заменить. Minecraft является торговой маркой Mojang AB, проект не связан с Mojang и Microsoft.
