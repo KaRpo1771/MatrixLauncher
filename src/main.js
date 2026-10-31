@@ -5,6 +5,7 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 const core = require('./core');
 const accounts = require('./accounts');
+const updater = require('./updater');
 let CURSEFORGE_KEY = process.env.CURSEFORGE_API_KEY || '';
 try { CURSEFORGE_KEY = require('./curseforge-key') || CURSEFORGE_KEY; } catch { /* файла нет (чистый клон репозитория): CurseForge будет отключён */ }
 let DISCORD_APP_ID = process.env.DISCORD_APP_ID || '';
@@ -131,6 +132,10 @@ function registerIpc() {
     presence.favs = Number(favs) || 0;
     applyPresence();
   });
+  /* --- обновление лаунчера через GitHub --- */
+  handle('update:state', () => updater.state());
+  handle('update:check', () => updater.check());
+  handle('update:install', () => updater.install());
   handle('sys:info', () => core.sysInfo());
   handle('app:info', () => ({ version: app.getVersion(), dataDir: core.DIRS.root, platform: process.platform }));
 
@@ -298,6 +303,17 @@ app.whenReady().then(() => {
   core.setCurseKeyProvider(() => CURSEFORGE_KEY);   // ключ CurseForge встроен в приложение
   registerIpc();
   configureDiscord();
+
+  updater.init({
+    current: () => app.getVersion(),
+    emit: st => send('update-state', st),
+    canRestart: () => presence.playing.size ? 'Сначала закройте игру, потом обновляйте лаунчер'
+      : (busy.size || presence.tasks.size) ? 'Дождитесь окончания скачивания, потом обновляйте лаунчер' : null,
+    quit: () => { rpc.destroy(); app.exit(0); }
+  });
+  // тихая проверка при запуске и дальше раз в 6 часов; о новой версии лаунчер сообщит сам
+  setTimeout(() => updater.check({ silent: true }), 6000);
+  setInterval(() => updater.check({ silent: true }), 6 * 3600 * 1000);
 
   // изменения в папках экземпляров (моды, скриншоты) сразу попадают в интерфейс
   core.watchInstances(ev => send('fs-change', ev));

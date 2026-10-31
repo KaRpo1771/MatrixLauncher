@@ -1,10 +1,14 @@
 {
   "name": "modmatrix-launcher",
   "version": "1.1.0",
-  "description": "MatrixL, лаунчер Minecraft с каталогом модов",
+  "description": "MatrixL, лаунчер Minecraft",
   "main": "src/main.js",
   "author": "MatrixL",
   "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KaRpo1771/MatrixLauncher.git"
+  },
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --x64 --publish never"
