@@ -267,6 +267,7 @@
     });
     // новая версия лаунчера: уведомление и точка у «Настроек», обновляется кнопкой в настройках
     mm.on('update-state', onUpdateState);
+    const ub = $id('updBtn'); if (ub) ub.onclick = updateClick;
     call('update:state').then(onUpdateState).catch(() => {});
     mm.on('ms-result', r => {
       S.ms = null;
@@ -284,19 +285,34 @@
       }
     });
   }
+  /* Плашка обновления в шапке: видна, только когда на GitHub есть новая версия */
   function onUpdateState(u) {
-    const nav = document.querySelector('.nav-item[data-page="settings"]');
-    const has = !!u && u.phase === 'available';
-    if (nav) {
-      let dot = nav.querySelector('.nav-dot');
-      if (has && !dot) { dot = document.createElement('span'); dot.className = 'nav-dot'; dot.setAttribute('aria-hidden', 'true'); nav.appendChild(dot); }
-      if (!has && dot) dot.remove();
-      nav.title = has ? `Доступна новая версия лаунчера v${u.latest}` : '';
+    const box = $id('updBanner'); if (!box) return;
+    S.upd = u || null;
+    const ph = u && u.phase;
+    const show = ph === 'available' || ph === 'downloading' || ph === 'installing';
+    box.hidden = !show;
+    if (!show) return;
+    const t = $id('updTitle'), sub = $id('updSub'), btn = $id('updBtn'), bar = $id('updBar');
+    bar.hidden = true; btn.hidden = false; btn.disabled = false;
+    if (ph === 'downloading') {
+      t.textContent = 'Скачиваю обновление…'; sub.textContent = `${u.pct || 0}%`;
+      bar.hidden = false; bar.value = u.pct || 0; btn.hidden = true;
+    } else if (ph === 'installing') {
+      t.textContent = 'Устанавливаю обновление'; sub.textContent = 'Лаунчер сейчас перезапустится'; btn.hidden = true;
+      bar.hidden = false; bar.value = 100;
+    } else if (u.error) {
+      t.textContent = 'Не удалось обновить'; sub.textContent = u.error; btn.textContent = 'Повторить';
+    } else {
+      t.textContent = `Доступна версия v${u.latest}`; sub.textContent = `Сейчас v${u.current}`;
+      btn.textContent = u.canInstall ? 'Обновить' : 'Скачать';
     }
-    if (has && S.updNotified !== u.latest) {
-      S.updNotified = u.latest;
-      if (typeof toast === 'function') toast(`Доступна новая версия MatrixL v${u.latest}. Откройте «Настройки» → «Обновление лаунчера».`, 9000);
-    }
+    box.title = sub.textContent;
+  }
+  async function updateClick() {
+    const u = S.upd; if (!u) return;
+    if (!u.canInstall && u.url) { window.open(u.url, '_blank'); return; }
+    try { await call('update:install'); } catch (ex) { note(ex.message); }
   }
   function afterAccountsChange() {
     S.heads = Object.fromEntries(Object.entries(S.heads).filter(([id]) => S.mcs.some(m => m.id === id)));

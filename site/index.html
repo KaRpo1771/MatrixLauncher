@@ -74,6 +74,12 @@
           Настройки
         </button>
       </nav>
+      <div class="upd-banner" id="updBanner" role="status" hidden>
+        <svg class="upd-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/></svg>
+        <span class="upd-txt"><b id="updTitle"></b><small id="updSub"></small></span>
+        <progress id="updBar" max="100" value="0" hidden></progress>
+        <button type="button" class="btn primary upd-btn" id="updBtn">Обновить</button>
+      </div>
       <div class="page-title" id="pageTitle" hidden>Главная</div>
       <div class="account" id="account"></div>
       <div class="scroll-progress" id="scrollProgress" role="progressbar" aria-label="Прокрутка страницы" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>

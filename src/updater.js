@@ -1,7 +1,7 @@
 'use strict';
 /* ============================================================
    Обновление лаунчера через GitHub Releases.
-   • проверка: последний релиз репозитория из package.json (поле repository);
+   • проверка: последний релиз репозитория из package.json (поле repository, по умолчанию KaRpo1771/MatrixLauncher);
    • установка: скачивается MatrixL-Setup-*.exe, проверяется размер и SHA-256
      (если GitHub его отдал), установщик запускается тихо и сам открывает новую версию;
    • портативная версия (MatrixL-portable.exe) сама себя заменить не может,
@@ -26,7 +26,8 @@ function repoFromPackage() {
     return m ? { owner: m[1], name: m[2] } : null;
   } catch { return null; }
 }
-const REPO = repoFromPackage();
+/* Если в package.json поля repository нет, обновления всё равно берутся из основного репозитория проекта */
+const REPO = repoFromPackage() || { owner: 'KaRpo1771', name: 'MatrixLauncher' };
 
 const parseVer = v => { const m = String(v || '').match(/(\d+)\.(\d+)\.(\d+)/); return m ? [+m[1], +m[2], +m[3]] : null; };
 function isNewer(a, b) {   // a новее b?
@@ -122,8 +123,11 @@ async function install() {
     set({ phase: 'downloading', pct: 0, error: '' });
     await download(asset, file);
     set({ phase: 'installing', pct: 100 });
-    // --updated: установщик тихо ставит поверх и сразу запускает новую версию
-    const child = spawn(file, ['/S', '--updated', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+    // Установщик ставит тихо поверх (--updated), а после него cmd сам запускает лаунчер:
+    // если установщик уже открыл его, второй экземпляр просто закроется (блокировка единственного экземпляра).
+    const exe = process.execPath;
+    const line = `"${file}" /S --updated --force-run & start "" "${exe}"`;
+    const child = spawn('cmd.exe', ['/d', '/s', '/c', `"${line}"`], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true });
     child.unref();
     setTimeout(() => hooks.quit(), 800);
   } catch (e) {

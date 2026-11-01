@@ -1324,13 +1324,14 @@ dialog.lc-dlg:has(.sk-view){width:min(560px,calc(100vw - 24px))}
 @media (prefers-reduced-motion:reduce){.acc-gear svg{transition:none}.acc-gear:hover svg{transform:none}}
 
 /* ---------- обновление лаунчера ---------- */
-.nav-item{position:relative}
-.nav-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);margin-left:2px;flex:none;animation:navDot 1.8s ease-in-out infinite}
-@keyframes navDot{50%{transform:scale(1.35)}}
+.upd-banner{display:flex;align-items:center;gap:12px;margin-left:auto;min-width:0;max-width:440px;padding:5px 6px 5px 12px;border:1px solid var(--accent);border-radius:var(--radius);background:color-mix(in srgb,var(--accent) 12%,var(--surface))}
+.upd-banner[hidden],.upd-banner [hidden]{display:none!important}
+.upd-ico{flex:none;width:20px;height:20px;fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.upd-txt{display:grid;min-width:0;line-height:1.2}
+.upd-txt b{font-size:13.5px;white-space:nowrap}
+.upd-txt small{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-banner progress{flex:none;width:90px;accent-color:var(--accent)}
+.upd-btn{flex:none;padding:7px 14px;font-size:13.5px}
 .upd-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
 .upd-notes{max-height:160px;overflow:auto;margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);font:12.5px/1.5 "IBM Plex Mono",monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
-@media (prefers-reduced-motion:reduce){.nav-dot{animation:none}}
-
-.sk-gl{display:block;width:100%;height:340px;cursor:grab;outline:none}
-.sk-gl.grab{cursor:grabbing}
-.sk-view figure{padding:12px 0}
+@media (max-width:1100px){.upd-txt small{display:none}}

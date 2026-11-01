@@ -740,6 +740,15 @@
     "На этом аккаунте нет плащей.": "This account has no capes."
   });
 
+  Object.assign(D, {
+    "Доступна версия": "Version available",
+    "Сейчас": "Current",
+    "Не удалось обновить": "Update failed",
+    "Устанавливаю обновление": "Installing update",
+    "Лаунчер сейчас перезапустится": "The launcher will restart now",
+    "Скачать": "Download"
+  });
+
   /* Фразы заменяются целиком по границам слов, самые длинные первыми.
      Совсем короткие (до 3 букв) слова только при полном совпадении текста. */
   const exact = new Map(Object.entries(D));
