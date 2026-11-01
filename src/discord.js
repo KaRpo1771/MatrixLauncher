@@ -1,12 +1,17 @@
 'use strict';
-
+/* ============================================================
+   MatrixL, статус в Discord (Rich Presence) без сторонних библиотек.
+   Разговор с локальным клиентом Discord идёт по его IPC-каналу:
+   Windows, именованный канал \\?\pipe\discord-ipc-N, Linux/macOS, сокет discord-ipc-N.
+   Если Discord не запущен, тихо пробуем снова раз в 15 секунд.
+   ============================================================ */
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 
 const OP = { HANDSHAKE: 0, FRAME: 1, CLOSE: 2, PING: 3, PONG: 4 };
 const RETRY_MS = 15000;
-const MIN_GAP_MS = 4000;      
+const MIN_GAP_MS = 4000;       // Discord ограничивает частоту обновлений статуса
 
 function pipePaths() {
   const out = [];

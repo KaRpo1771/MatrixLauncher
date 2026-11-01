@@ -3,7 +3,7 @@
    заменяет главную страницу: фон из скриншотов игры, «Играть»
    справа снизу, «Настройки экземпляра» слева.
    Регистрации в лаунчере нет, только вход в игровой аккаунт
-   (Ely.by со скинами, Microsoft или обычный). Мост к ядру: window.mm.
+   (Ely.by со скинами, Microsoft или оффлайн). Мост к ядру: window.mm.
    ============================================================ */
 (function () {
   'use strict';
@@ -17,7 +17,7 @@
   try { S.sel = localStorage.getItem('modmatrix:sel'); } catch (e) { /* без хранилища */ }
 
   const LD = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
-  const TYPES = { ely: 'Ely.by', microsoft: 'Microsoft', offline: 'Обычный аккаунт' };
+  const TYPES = { ely: 'Ely.by', microsoft: 'Microsoft', offline: 'Оффлайн аккаунт' };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const $id = id => document.getElementById(id);
   const onHome = () => typeof state !== 'undefined' && state.page === 'home';
@@ -265,6 +265,9 @@
       if (onHome()) render();
       note(g.code === 0 ? 'Игра закрыта' : `Игра завершилась с кодом ${g.code}, подробности в журнале`);
     });
+    // новая версия лаунчера: уведомление и точка у «Настроек», обновляется кнопкой в настройках
+    mm.on('update-state', onUpdateState);
+    call('update:state').then(onUpdateState).catch(() => {});
     mm.on('ms-result', r => {
       S.ms = null;
       S.msErr = (!r.ok && r.error !== 'Вход отменён') ? r.error : '';
@@ -280,6 +283,20 @@
         if (ev.kind === 'mods') { await reloadSys(); loadMods(ev.id); if (!S.ofFile) loadOptifine(ev.id); updateRamHint('lcI'); }
       }
     });
+  }
+  function onUpdateState(u) {
+    const nav = document.querySelector('.nav-item[data-page="settings"]');
+    const has = !!u && u.phase === 'available';
+    if (nav) {
+      let dot = nav.querySelector('.nav-dot');
+      if (has && !dot) { dot = document.createElement('span'); dot.className = 'nav-dot'; dot.setAttribute('aria-hidden', 'true'); nav.appendChild(dot); }
+      if (!has && dot) dot.remove();
+      nav.title = has ? `Доступна новая версия лаунчера v${u.latest}` : '';
+    }
+    if (has && S.updNotified !== u.latest) {
+      S.updNotified = u.latest;
+      if (typeof toast === 'function') toast(`Доступна новая версия MatrixL v${u.latest}. Откройте «Настройки» → «Обновление лаунчера».`, 9000);
+    }
   }
   function afterAccountsChange() {
     S.heads = Object.fromEntries(Object.entries(S.heads).filter(([id]) => S.mcs.some(m => m.id === id)));
@@ -353,7 +370,7 @@
           <div class="lc-top-right">
             <button class="lc-chip" data-act="accounts" type="button" title="Аккаунты Minecraft">
               ${avatar(acc, 'sm')}
-              <span class="lc-chip-t"><b>${esc(acc ? acc.name : 'Войти в аккаунт')}</b><small>${acc ? esc(TYPES[acc.type] || acc.type) : 'Ely.by, Microsoft или обычный'}</small></span>
+              <span class="lc-chip-t"><b>${esc(acc ? acc.name : 'Войти в аккаунт')}</b><small>${acc ? esc(TYPES[acc.type] || acc.type) : 'Ely.by, Microsoft или оффлайн'}</small></span>
             </button>
             <button class="lc-chip lc-chip-icon" data-act="log" type="button" title="Журнал">Журнал</button>
           </div>
@@ -486,14 +503,26 @@
   }
   /* OptiFine в окне создания: версия игры ещё не скачана, поэтому смотрим список по номеру версии */
   async function refreshNewOf(mc) {
-    const note0 = $id('lcNOfNote'); if (!note0 || !mc) return;
+    const note0 = $id('lcNOfNote'), sel = $id('lcNOfSel'); if (!note0 || !sel || !mc) return;
     note0.textContent = `Ищу OptiFine для Minecraft ${mc}…`;
+    sel.disabled = true; sel.innerHTML = '<option>Загружаю…</option>';
     try {
       const info = await call('optifine:versions', mc);
-      const n2 = $id('lcNOfNote'); if (!n2 || $id('lcMc').value !== mc) return;
-      const rec = info.versions.find(v => v.file === info.recommended) || info.versions[0];
-      n2.textContent = rec ? `Для Minecraft ${mc} есть OptiFine ${ofName(rec)}. Если отметить галочку, он скачается после создания экземпляра.` : `Для Minecraft ${mc} OptiFine не найден.`;
-    } catch (e) { const n2 = $id('lcNOfNote'); if (n2) n2.textContent = 'Не удалось получить список OptiFine: ' + e.message; }
+      const n2 = $id('lcNOfNote'), s2 = $id('lcNOfSel'); if (!n2 || !s2 || $id('lcMc').value !== mc) return;
+      S.newOf = info;
+      if (!info.versions.length) {
+        s2.innerHTML = '<option value="">Нет версий</option>'; s2.disabled = true;
+        n2.textContent = `Для Minecraft ${mc} OptiFine не найден, либо его не выпускали для этой версии, либо нет связи с сайтом OptiFine.`;
+        return;
+      }
+      s2.innerHTML = info.versions.map(v => {
+        const t = ofTags(v, info);
+        return `<option value="${esc(v.file)}">OptiFine ${esc(ofName(v))}${t.length ? ' · ' + t.join(', ') : ''}</option>`;
+      }).join('');
+      s2.value = info.recommended || info.versions[0].file; s2.disabled = false;
+      const rec = info.versions.find(v => v.file === info.recommended);
+      n2.textContent = rec ? `Для Minecraft ${mc} рекомендуется OptiFine ${ofName(rec)}.` : `Для Minecraft ${mc} доступно версий OptiFine: ${info.versions.length}.`;
+    } catch (e) { const n2 = $id('lcNOfNote'); if (n2) n2.textContent = 'Не удалось получить список OptiFine: ' + e.message; const s2 = $id('lcNOfSel'); if (s2) s2.innerHTML = '<option value="">Нет данных</option>'; }
   }
   function onDlgInput(e) {
     const id = e.target.id || '';
@@ -502,6 +531,7 @@
     else if (/^lc[NI](Auto|Range)$/.test(id)) updateRamHint(id.slice(0, 3));
     else if (id === 'lcManySel') { saveModTarget(e.target.value); refreshManyCompat(); }
     else if (id === 'lcOfSel') paintOptifineState();
+    else if (e.target.name === 'skVar' && S.skViewer && S.skImgs) S.skViewer.update({ ...S.skImgs, slim: e.target.value === 'slim' });
   }
 
   /* --- аватарки экземпляров --- */
@@ -650,7 +680,7 @@
     else pane = `
       <form class="acc-form" id="lcOffForm">
         <label class="field"><span>Ник (3–16 символов, латиница, цифры, _)</span><input id="lcOffName" type="text" maxlength="16" autocomplete="off" required></label>
-        <button class="btn primary" type="submit">Добавить обычный аккаунт</button>
+        <button class="btn primary" type="submit">Добавить оффлайн-аккаунт</button>
         <p class="filter-note">«Оффлайн»: игра запускается с выбранным ником без проверки лицензии и без скинов. Не работает на серверах с онлайн-режимом.</p>
       </form>`;
     return `<div class="lc-list">${rows}</div>
@@ -668,35 +698,31 @@
     const p = k.data, busy = k.busy ? 'disabled' : '';
     let out = '';
     if (p.warning) out += `<div class="banner err"><b>Изменить скин сейчас нельзя</b>${esc(p.warning)}</div>`;
-    out += `<div class="sk-view" aria-label="Предпросмотр скина">
-        <figure><canvas id="skFront" class="sk-cv" aria-label="Спереди"></canvas><figcaption>Спереди</figcaption></figure>
-        <figure><canvas id="skBack" class="sk-cv" aria-label="Сзади"></canvas><figcaption>Сзади</figcaption></figure>
-      </div>`;
+    out += `<div class="sk-view" id="skBox" aria-label="Предпросмотр скина"><canvas id="skGL" class="sk-gl" title="Потяните, чтобы повернуть. Двойной щелчок сбрасывает вид"></canvas></div>`;
     if (p.canEdit) {
       out += `<h4 class="sk-h">Скин</h4>
         <div class="sk-variant" role="radiogroup" aria-label="Тип рук">
-          <label><input type="radio" name="skVar" value="classic" ${p.slim ? '' : 'checked'}> Классический <span class="muted">(руки 4 пикселя)</span></label>
-          <label><input type="radio" name="skVar" value="slim" ${p.slim ? 'checked' : ''}> Тонкий <span class="muted">(руки 3 пикселя)</span></label>
+          <label><input type="radio" name="skVar" value="classic" ${p.slim ? '' : 'checked'}><span>Классический</span></label>
+          <label><input type="radio" name="skVar" value="slim" ${p.slim ? 'checked' : ''}><span>Тонкий</span></label>
         </div>
         <div class="lc-install">
           <button class="btn primary" data-act="skin-pick" type="button" ${busy}>Выбрать файл скина…</button>
           <button class="btn" data-act="skin-reset" type="button" ${busy}>Вернуть стандартный</button>
         </div>
-        <p class="filter-note">Нужен PNG 64×64 (или 64×32). Скин появится в игре и на серверах сразу после загрузки.</p>
         <h4 class="sk-h">Плащ</h4>`;
       const none = !p.capes.some(c => c.active);
       out += `<div class="sk-capes" role="radiogroup" aria-label="Плащ">
         <button type="button" class="sk-cape ${none ? 'on' : ''}" data-act="cape-set" data-cape="" aria-pressed="${none}" ${busy}><span class="sk-cape-none">Нет</span><small>Без плаща</small></button>
         ${p.capes.map(c => `<button type="button" class="sk-cape ${c.active ? 'on' : ''}" data-act="cape-set" data-cape="${esc(c.id)}" aria-pressed="${c.active}" ${busy}><canvas class="sk-cape-cv" data-cape-img="${esc(c.id)}" width="10" height="16"></canvas><small>${esc(c.alias || 'Плащ')}</small></button>`).join('')}
       </div>`;
-      if (!p.capes.length) out += '<p class="filter-note">На этом аккаунте пока нет плащей. Плащи выдаёт Mojang (за события и акции), в лаунчере их получить нельзя.</p>';
+      if (!p.capes.length) out += '<p class="filter-note">На этом аккаунте нет плащей.</p>';
       if (k.busy) out += '<p class="filter-note" role="status">Отправляю в Mojang…</p>';
     } else if (p.type === 'ely') {
       out += `<p class="filter-note">Скин и плащ Ely.by меняются на сайте, а в лаунчере и игре появятся сами.</p>
         <div class="lc-install"><a class="btn primary" href="${esc(p.web || 'https://ely.by/skins')}" target="_blank" rel="noopener">Открыть Ely.by</a>
         <button class="btn" data-act="skin-reload" type="button">Обновить</button></div>`;
     } else if (p.type === 'offline') {
-      out += '<p class="filter-note">У обычного (оффлайн) аккаунта своего скина нет: в игре будет стандартный. Чтобы менять скин и плащ, войдите через Microsoft.</p>';
+      out += '<p class="filter-note">У оффлайн-аккаунта своего скина нет: в игре будет стандартный. Чтобы менять скин и плащ, войдите через Microsoft.</p>';
     } else {
       out += '<div class="lc-install"><button class="btn" data-act="skin-reload" type="button">Повторить</button></div>';
     }
@@ -744,17 +770,25 @@
   }
   async function paintSkinPreview() {
     const k = S.sk;
+    if (S.skViewer) { S.skView = S.skViewer.view(); S.skViewer.destroy(); S.skViewer = null; }
     if (!k || !k.data) return;
     const p = k.data, token = k;
     try {
-      const skinSrc = p.skin || null;
-      const skinImg = skinSrc ? await loadImg(skinSrc) : await steveImage();
+      const skinImg = p.skin ? await loadImg(p.skin) : await steveImage();
       const activeCape = p.capes.find(c => c.active && c.img);
       const capeImg = activeCape ? await loadImg(activeCape.img) : null;
       if (S.sk !== token) return;
-      const a = $id('skFront'), b = $id('skBack');
-      if (a) drawFigure(a, skinImg, null, p.slim, false, 6);
-      if (b) drawFigure(b, skinImg, capeImg, p.slim, true, 6);
+      S.skImgs = { skin: skinImg, cape: capeImg };
+      const gl = $id('skGL');
+      const viewer = gl && window.SkinViewer ? window.SkinViewer.create(gl, S.skView) : null;
+      if (viewer) {
+        viewer.update({ skin: skinImg, cape: capeImg, slim: p.slim });
+        S.skViewer = viewer;
+      } else if ($id('skBox')) {      // WebGL недоступен: плоский вид спереди и сзади
+        $id('skBox').innerHTML = '<figure><canvas id="skFront" class="sk-cv" aria-label="Спереди"></canvas><figcaption>Спереди</figcaption></figure><figure><canvas id="skBack" class="sk-cv" aria-label="Сзади"></canvas><figcaption>Сзади</figcaption></figure>';
+        drawFigure($id('skFront'), skinImg, null, p.slim, false, 6);
+        drawFigure($id('skBack'), skinImg, capeImg, p.slim, true, 6);
+      }
       for (const cv of document.querySelectorAll('[data-cape-img]')) {
         const c = p.capes.find(x => x.id === cv.dataset.capeImg);
         if (!c || !c.img) continue;
@@ -814,6 +848,7 @@
         <div class="lp-box" id="lcNOf">
           <div class="of-head"><img class="of-logo" src="optifine.webp" alt="" width="48" height="48">
             <div><h4>OptiFine</h4><p class="filter-note" id="lcNOfNote">Выберите версию Minecraft, и здесь появятся доступные сборки OptiFine.</p></div></div>
+          <div class="of-row"><select id="lcNOfSel" aria-label="Версия OptiFine" disabled><option>Выберите версию Minecraft</option></select></div>
           <div class="checks"><label><input type="checkbox" id="lcNOfOn"> Установить OptiFine вместе с экземпляром (нужен Forge)</label></div>
         </div>
         ${ramControl('lcN', { auto: true, ram: s.ramModded, rec: s.ramModded || 3072 })}
@@ -1200,6 +1235,8 @@
         ramAuto: $id('lcNAuto').checked, ram: $id('lcNRange').value
       };
       const wantOf = !!($id('lcNOfOn') && $id('lcNOfOn').checked);
+      const ofPick = ($id('lcNOfSel') && $id('lcNOfSel').value) || '';
+      if (wantOf && !ofPick) { note('Для этой версии Minecraft нет OptiFine: снимите галочку'); return; }
       if (wantOf && lo.loader !== 'forge') { note('OptiFine ставится вместе с Forge: выберите загрузчик Forge или снимите галочку'); return; }
       const label = (opts.name || '').trim() || `Minecraft ${mc}`;
       S.creating = true;
@@ -1214,7 +1251,7 @@
           taskProgress('task:create', 'Скачиваю OptiFine…', null);
           try {
             const info = await call('optifine:list', inst.id);
-            const file = info.recommended || (info.versions[0] && info.versions[0].file);
+            const file = (ofPick && info.versions.some(v => v.file === ofPick)) ? ofPick : (info.recommended || (info.versions[0] && info.versions[0].file));
             if (file) await call('optifine:install', { id: inst.id, file }); else ofNote = ' OptiFine для этой версии не найден.';
           } catch (e) { ofNote = ` OptiFine не установился: ${e.message}`; }
         }

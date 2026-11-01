@@ -34,7 +34,7 @@
     'Статус в Discord включён': 'Discord status enabled', 'Статус в Discord выключен': 'Discord status disabled',
     'Играть': 'Play', 'Запустить': 'Launch', 'Создать экземпляр': 'Create instance', 'Создать установку': 'Create installation', 'Удалить установку': 'Delete installation', 'Переименовать': 'Rename',
     'Установок пока нет': 'No installations yet', 'Новости Minecraft': 'Minecraft news', 'Все новости ↗': 'All news ↗', 'Читать ↗': 'Read ↗',
-    'Войти в аккаунт': 'Sign in', 'Добавить аккаунт': 'Add account', 'Добавить обычный аккаунт': 'Add offline account',
+    'Войти в аккаунт': 'Sign in', 'Добавить аккаунт': 'Add account', 'Добавить оффлайн-аккаунт': 'Add offline account',
     'Войти через Ely.by': 'Sign in with Ely.by', 'Войти через Microsoft': 'Sign in with Microsoft', 'Зарегистрироваться на ely.by': 'Sign up on ely.by',
     'Не удалось войти': 'Sign-in failed', 'Отменить вход': 'Cancel sign-in', 'Пароль': 'Password', 'Email или ник Ely.by': 'Email or Ely.by username',
     'Ник (3–16 символов, латиница, цифры, _)': 'Username (3–16 chars, Latin letters, digits, _)',
@@ -45,7 +45,7 @@
     'Если включена двухфакторная защита, введите пароль в виде «пароль:код» (код из приложения-аутентификатора).': 'If two-factor protection is on, enter the password as "password:code" (code from the authenticator app).',
     '«Оффлайн»: игра запускается с выбранным ником без проверки лицензии и без скинов. Не работает на серверах с онлайн-режимом.': 'Offline: the game starts with the chosen username without license check and without skins. Does not work on online-mode servers.',
     'Войдите через Ely.by, и в игре и на серверах Ely.by будет ваш скин. Нет аккаунта?': 'Sign in with Ely.by to have your skin in game and on Ely.by servers. No account?',
-    'Обычный аккаунт': 'Offline account', 'Аватарка': 'Avatar',
+    'Оффлайн аккаунт': 'Offline account', 'Аватарка': 'Avatar',
     'Название': 'Name', 'Версия Minecraft': 'Minecraft version', 'Версии игры': 'Game versions', 'Версия загрузчика': 'Loader version', 'Загрузчик': 'Loader', 'Загрузчик модов': 'Mod loader', 'Загрузчики': 'Loaders',
     'Любая версия': 'Any version', 'Нет версий': 'No versions', 'Загружаю версии…': 'Loading versions…', 'Загружаю список…': 'Loading list…', 'Загружаю подробности…': 'Loading details…',
     'Выберите версию Minecraft и загрузчик модов, остальное лаунчер скачает сам.': 'Pick a Minecraft version and a mod loader; the launcher downloads the rest.',
@@ -387,7 +387,7 @@
     "из папки mods рассчитан на Forge, а в этом экземпляре,": "from the mods folder is built for Forge, and in this instance,",
     "или id сборки": "or modpack id",
     "или ник Ely.by": "or Ely.by username",
-    "или обычный": "or offline",
+    "или оффлайн": "or offline",
     "источники недоступны": "sources unavailable",
     "исчезнет из лаунчера. Саму учётную запись это не удалит.": "will disappear from the launcher. The account itself will not be deleted.",
     "каждые 15 секунд": "every 15 seconds",
@@ -657,7 +657,7 @@
     "Скин и плащ Ely.by меняются на сайте, а в лаунчере и игре появятся сами.": "Ely.by skin and cape are changed on the website; they will appear in the launcher and game on their own.",
     "Открыть Ely.by": "Open Ely.by",
     "Обновить": "Refresh",
-    "У обычного (оффлайн) аккаунта своего скина нет: в игре будет стандартный. Чтобы менять скин и плащ, войдите через Microsoft.": "An ordinary (offline) account has no skin of its own: the default one is used in the game. To change skin and cape, sign in with Microsoft.",
+    "У оффлайн-аккаунта своего скина нет: в игре будет стандартный. Чтобы менять скин и плащ, войдите через Microsoft.": "An offline account has no skin of its own: the default one is used in the game. To change skin and cape, sign in with Microsoft.",
     "Загружаю скин…": "Loading skin…",
     "Не удалось загрузить скин": "Could not load the skin",
     "Изменить скин сейчас нельзя": "The skin cannot be changed right now",
@@ -681,6 +681,63 @@
     "Ely.by: не удалось получить скин (": "Ely.by: could not get the skin (",
     "Не удалось получить скин (": "Could not get the skin (",
     "Не удалось загрузить скин:": "Could not load the skin:"
+  });
+
+  Object.assign(D, {
+    "Обновление лаунчера": "Launcher update",
+    "Доступна новая версия MatrixL": "A new MatrixL version is available:",
+    "Загружаю…": "Loading…",
+    "Проверить обновления": "Check for updates",
+    "Проверяю…": "Checking…",
+    "Скачиваю…": "Downloading…",
+    "Устанавливаю…": "Installing…",
+    "Обновить и перезапустить": "Update and restart",
+    "Проверить снова": "Check again",
+    "Повторить": "Retry",
+    "Страница релиза ↗": "Release page ↗",
+    "Проверяю наличие обновлений…": "Checking for updates…",
+    "Установлена версия": "Installed version",
+    "Это последняя версия.": "This is the latest version.",
+    "Доступна новая версия": "A new version is available",
+    "(у вас": "(you have",
+    "Эта версия обновляется вручную: скачайте новый файл на странице релиза.": "This version is updated manually: download the new file from the release page.",
+    "Скачиваю обновление…": "Downloading update…",
+    "Устанавливаю обновление, лаунчер сейчас перезапустится…": "Installing the update, the launcher will restart now…",
+    "Не удалось проверить обновления": "Could not check for updates",
+    "Проверьте, нет ли новой версии лаунчера.": "Check whether a new launcher version is available.",
+    "Обновить лаунчер?": "Update the launcher?",
+    "Лаунчер скачает версию": "The launcher will download version",
+    "закроется и сам запустится уже на новой версии. Ваши аккаунты и экземпляры останутся на месте.": "close and start again on the new version by itself. Your accounts and instances will stay in place.",
+    "Обновить": "Update",
+    "Доступна новая версия лаунчера": "A new launcher version is available",
+    "Откройте «Настройки» → «Обновление лаунчера».": "Open Settings → Launcher update.",
+    "Не указан репозиторий обновлений (поле repository в package.json)": "The update repository is not set (repository field in package.json)",
+    "На GitHub пока нет ни одного релиза": "There are no releases on GitHub yet",
+    "GitHub временно ограничил запросы, попробуйте через несколько минут": "GitHub has temporarily limited requests, try again in a few minutes",
+    "GitHub вернул ошибку": "GitHub returned an error",
+    "Не удалось разобрать версию релиза": "Could not parse the release version",
+    "Файл обновления размещён на неизвестном сервере": "The update file is hosted on an unknown server",
+    "Не удалось скачать обновление (": "Could not download the update (",
+    "Файл обновления слишком большой": "The update file is too large",
+    "Файл скачан не полностью, попробуйте ещё раз": "The file was not fully downloaded, try again",
+    "Контрольная сумма обновления не совпала": "Update checksum mismatch",
+    "Обновление недоступно для установки из лаунчера": "This update cannot be installed from the launcher",
+    "Сначала закройте игру, потом обновляйте лаунчер": "Close the game first, then update the launcher",
+    "Дождитесь окончания скачивания, потом обновляйте лаунчер": "Wait for downloads to finish, then update the launcher"
+  });
+
+  Object.assign(D, {
+    "Выберите версию Minecraft": "Select a Minecraft version",
+    "Нет версий": "No versions",
+    "Нет данных": "No data",
+    "Загружаю…": "Loading…",
+    "Для этой версии Minecraft нет OptiFine: снимите галочку": "There is no OptiFine for this Minecraft version: uncheck the box",
+    "Оффлайн аккаунт": "Offline account"
+  });
+
+  Object.assign(D, {
+    "Потяните, чтобы повернуть. Двойной щелчок сбрасывает вид": "Drag to rotate. Double-click resets the view",
+    "На этом аккаунте нет плащей.": "This account has no capes."
   });
 
   /* Фразы заменяются целиком по границам слов, самые длинные первыми.

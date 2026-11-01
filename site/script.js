@@ -289,9 +289,9 @@ function shortNum(n){
 }
 function dateRu(s){ return s ? new Date(s).toLocaleDateString("ru-RU") : "-"; }
 let toastTimer;
-function toast(msg){
+function toast(msg, ms){
   const el = $("toast"); el.textContent = msg; el.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(()=> el.hidden = true, 2400);
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=> el.hidden = true, ms || 2400);
 }
 
 function normTitle(t){ return String(t||"").toLowerCase().replace(/[^a-z0-9а-яё]+/gi,""); }
@@ -1510,6 +1510,16 @@ function renderSettingsPage(){
           <span class="dc-track" aria-hidden="true"><i></i></span>
         </button>
       </div>` : ""}
+      ${window.mm ? `<div class="setting-card" id="stUpdate">
+        <h3>Обновление лаунчера</h3>
+        <p id="upStat" role="status">Загружаю…</p>
+        <progress id="upBar" max="100" value="0" hidden style="width:100%"></progress>
+        <pre class="upd-notes" id="upNotes" hidden></pre>
+        <div class="upd-actions">
+          <button type="button" class="btn primary" id="upBtn" disabled>Проверить обновления</button>
+          <a class="btn" id="upLink" target="_blank" rel="noopener" hidden>Страница релиза ↗</a>
+        </div>
+      </div>` : ""}
       <div class="setting-card">
         <h3>Об источниках</h3>
         <p>MatrixL не ведёт свой каталог. Все данные приходят напрямую с площадок при каждом запросе.</p>
@@ -1565,6 +1575,50 @@ function renderSettingsPage(){
       if(!r.ok){ toast(r.error); return; }
       paint(r.data); toast(want ? "Статус в Discord включён" : "Статус в Discord выключен");
       if(want) setTimeout(load, 2500);   // подключение к Discord занимает мгновение
+    });
+  }
+
+  if(window.mm && $("stUpdate")){
+    if(window.__updOff) window.__updOff();
+    const U = {st:{}};
+    const paint = st=>{
+      if(!$("stUpdate")){ if(window.__updOff) window.__updOff(); return; }
+      U.st = st;
+      const btn = $("upBtn"), bar = $("upBar"), notes = $("upNotes"), link = $("upLink");
+      const cur = st.current ? "v"+st.current : "";
+      let text = "", label = "Проверить обновления", canClick = true, showBar = false;
+      switch(st.phase){
+        case "checking": text = "Проверяю наличие обновлений…"; canClick = false; label = "Проверяю…"; break;
+        case "uptodate": text = `Установлена версия ${cur}. Это последняя версия.`; break;
+        case "available":
+          text = `Доступна новая версия v${st.latest} (у вас ${cur}).`;
+          if(st.canInstall) label = "Обновить и перезапустить";
+          else { text += " Эта версия обновляется вручную: скачайте новый файл на странице релиза."; label = "Проверить снова"; }
+          break;
+        case "downloading": text = `Скачиваю обновление… ${st.pct||0}%`; canClick = false; label = "Скачиваю…"; showBar = true; break;
+        case "installing": text = "Устанавливаю обновление, лаунчер сейчас перезапустится…"; canClick = false; label = "Устанавливаю…"; showBar = true; break;
+        case "error": text = st.error || "Не удалось проверить обновления"; label = "Повторить"; break;
+        default: text = cur ? `Установлена версия ${cur}.` : "Проверьте, нет ли новой версии лаунчера.";
+      }
+      if(st.phase === "available" && st.error) text += " " + st.error;
+      $("upStat").textContent = text;
+      btn.textContent = label; btn.disabled = !canClick;
+      bar.hidden = !showBar; bar.value = st.pct || 0;
+      const showNotes = st.phase === "available" && st.notes;
+      notes.hidden = !showNotes; notes.textContent = showNotes ? st.notes : "";
+      link.hidden = !(st.phase === "available" && st.url); if(st.url) link.href = st.url;
+    };
+    window.__updOff = mm.on("update-state", paint);
+    mm.invoke("update:state").then(r=>{ if(r.ok) paint(r.data); });
+    $("upBtn").addEventListener("click", async ()=>{
+      if(U.st.phase === "available" && U.st.canInstall){
+        if(!await window.UI.confirm({title:"Обновить лаунчер?", text:`Лаунчер скачает версию v${U.st.latest}, закроется и сам запустится уже на новой версии. Ваши аккаунты и экземпляры останутся на месте.`, ok:"Обновить"})) return;
+        const r = await mm.invoke("update:install");
+        if(!r.ok) toast(r.error, 5000);
+      } else {
+        const r = await mm.invoke("update:check");
+        if(!r.ok) toast(r.error, 5000);
+      }
     });
   }
 
