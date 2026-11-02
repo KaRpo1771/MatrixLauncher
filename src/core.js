@@ -818,7 +818,7 @@ function buildCommand({ v, libs, jar, javaExe, inst, account, gameDir, nativesDi
   return { cmd: javaExe, args: [...mem, ...jvm, v.mainClass, ...game] };
 }
 
-async function launch(inst, account, report, onLog, onExit) {
+async function launch(inst, account, report, onLog, onExit, onReady, onMinimize) {
   if (running.has(inst.id)) throw new Error('Эта установка уже запущена');
   const g = await ensureGame(inst.versionId, report, { verify: false });
   const gameDir = instDir(inst.id);
@@ -854,11 +854,50 @@ async function launch(inst, account, report, onLog, onExit) {
   }
   const child = spawn(exe, args, { cwd: gameDir });
   running.set(inst.id, child);
-  const out = lineFeeder(onLog), err = lineFeeder(onLog);
+
+  // «Окно игры появилось»: на Windows ждём реальное окно процесса, на остальных системах и как запасной
+  // вариант узнаём по строкам журнала, которые игра пишет уже после создания окна.
+  let ready = false, ps = null, fallback = null;
+  let minPs = null;   // слежение за сворачиванием окна игры (только Windows)
+  const stopMin = () => { if (minPs) { try { minPs.kill(); } catch { /* уже завершился */ } minPs = null; } };
+  const stopWatch = () => { clearTimeout(fallback); if (ps) { try { ps.kill(); } catch { /* уже завершился */ } ps = null; } };
+  const startMinWatch = () => {
+    if (OS !== 'windows' || !onMinimize || !child.pid || minPs) return;
+    const script = `$ErrorActionPreference='SilentlyContinue'
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class MMW{[DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);}'
+$last=''
+while($true){$p=Get-Process -Id ${child.pid | 0};if(-not $p){break};$h=$p.MainWindowHandle;if($h -ne 0){if([MMW]::IsIconic($h)){$s='MIN'}else{$s='NORM'};if($s -ne $last){$last=$s;[Console]::Out.WriteLine($s);[Console]::Out.Flush()}};Start-Sleep -Milliseconds 350}`;
+    try {
+      minPs = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true });
+      let buf = '';
+      minPs.stdout.on('data', d => {
+        buf += String(d); let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+          if (line === 'MIN' || line === 'NORM') { try { onMinimize(line === 'MIN'); } catch { /* не критично */ } }
+        }
+      });
+      minPs.on('error', () => { minPs = null; });
+    } catch { minPs = null; }
+  };
+  const markReady = () => { if (ready) return; ready = true; stopWatch(); if (onReady) { try { onReady(); } catch { /* не критично */ } } startMinWatch(); };
+  const READY_RE = /Backend library: LWJGL|Reloading ResourceManager|OpenAL initialized|Sound engine started|Created: \d+x\d+/i;
+  const logLine = l => { onLog(l); if (!ready && READY_RE.test(l)) markReady(); };
+  if (OS === 'windows' && child.pid) {
+    const script = `$ErrorActionPreference='SilentlyContinue';for($i=0;$i -lt 1500;$i++){$p=Get-Process -Id ${child.pid | 0};if(-not $p){break};if($p.MainWindowHandle -ne 0 -and $p.MainWindowTitle){'READY';break};Start-Sleep -Milliseconds 250}`;
+    try {
+      ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true });
+      ps.stdout.on('data', d => { if (String(d).includes('READY')) markReady(); });
+      ps.on('error', () => { ps = null; });
+    } catch { ps = null; }
+  }
+  fallback = setTimeout(markReady, 5 * 60 * 1000);   // если окно так и не распознали, не оставляем «Запуск» навсегда
+
+  const out = lineFeeder(logLine), err = lineFeeder(logLine);
   child.stdout.on('data', out.push);
   child.stderr.on('data', err.push);
-  child.on('error', e => { running.delete(inst.id); onLog('Ошибка запуска: ' + e.message); onExit(-1); });
-  child.on('close', code => { out.flush(); err.flush(); running.delete(inst.id); onExit(code); });
+  child.on('error', e => { stopWatch(); stopMin(); running.delete(inst.id); onLog('Ошибка запуска: ' + e.message); onExit(-1); });
+  child.on('close', code => { stopWatch(); stopMin(); out.flush(); err.flush(); running.delete(inst.id); onExit(code); });
   return { pid: child.pid };
 }
 function isRunning(id) { return running.has(id); }

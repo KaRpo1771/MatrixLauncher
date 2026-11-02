@@ -1510,6 +1510,15 @@ function renderSettingsPage(){
           <span class="dc-track" aria-hidden="true"><i></i></span>
         </button>
       </div>` : ""}
+      ${window.mm ? `<div class="setting-card" id="stHide">
+        <h3>Сворачивание лаунчера</h3>
+        <p>После успешного запуска игры лаунчер прячется и пропадает с панели задач. Когда вы сворачиваете окно Minecraft или закрываете игру, он появляется снова.</p>
+        <button type="button" class="dc-toggle" id="hideOn" role="switch" aria-checked="false" aria-describedby="hideStat">
+          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
+          <span class="dc-txt"><b>Сворачивать лаунчер при запуске игры</b><small id="hideStat">Загружаю…</small></span>
+          <span class="dc-track" aria-hidden="true"><i></i></span>
+        </button>
+      </div>` : ""}
       ${window.mm ? `<div class="setting-card" id="stUpdate">
         <h3>Обновление лаунчера</h3>
         <p id="upStat" role="status">Загружаю…</p>
@@ -1575,6 +1584,26 @@ function renderSettingsPage(){
       if(!r.ok){ toast(r.error); return; }
       paint(r.data); toast(want ? "Статус в Discord включён" : "Статус в Discord выключен");
       if(want) setTimeout(load, 2500);   // подключение к Discord занимает мгновение
+    });
+  }
+
+  if(window.mm && $("stHide")){
+    const btn = $("hideOn"), win = mm.platform === "win32";
+    const paint = st=>{
+      const on = win && !!st.hideOnLaunch;
+      btn.setAttribute("aria-checked", String(on));
+      $("hideStat").textContent = !win ? "Доступно только в Windows."
+        : on ? "Включено · лаунчер спрячется после запуска игры." : "Выключено · лаунчер остаётся на экране.";
+    };
+    if(!win) btn.disabled = true;
+    mm.invoke("settings:get").then(r=>{ if(r.ok) paint(r.data); });
+    btn.addEventListener("click", async ()=>{
+      const want = btn.getAttribute("aria-checked") !== "true";
+      btn.disabled = true;
+      const r = await mm.invoke("settings:set", { hideOnLaunch: want });
+      btn.disabled = false;
+      if(!r.ok){ toast(r.error); return; }
+      paint(r.data); toast(want ? "Лаунчер будет сворачиваться при запуске игры" : "Сворачивание лаунчера выключено");
     });
   }
 

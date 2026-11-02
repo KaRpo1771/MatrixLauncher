@@ -59,6 +59,7 @@ function setSettings(patch) {
   const cur = getSettings();
   for (const k of ['msClientId']) if (patch && k in patch) cur[k] = String(patch[k] || '').trim();
   if (patch && 'discordEnabled' in patch) cur.discordEnabled = !!patch.discordEnabled;
+  if (patch && 'hideOnLaunch' in patch) cur.hideOnLaunch = !!patch.hideOnLaunch;
   // ключ CurseForge хранится зашифрованным и в интерфейс не отдаётся
   if (patch && 'curseforgeKey' in patch) {
     const key = String(patch.curseforgeKey || '').trim();
@@ -95,7 +96,7 @@ function select(id) {
   return mutate(d => { if (!d.accounts.some(a => a.id === id)) throw new Error('Аккаунт не найден'); d.selected = id; return view(d); });
 }
 function remove(id) {
-  tokMem.delete(id); headMem.delete(id);
+  tokMem.delete(id); headMem.delete(id); profMem.delete(id);
   return mutate(d => {
     d.accounts = d.accounts.filter(a => a.id !== id);
     if (d.selected === id) d.selected = d.accounts[0] ? d.accounts[0].id : null;
@@ -306,8 +307,8 @@ async function fetchTexture(url) {
   let u; try { u = new URL(url); } catch { return null; }
   if (!(u.hostname === 'textures.minecraft.net' || u.hostname === 'ely.by' || u.hostname.endsWith('.ely.by'))) return null;
   if (texMem.has(url)) return texMem.get(url);
-  const r = await fetch(url, { headers: { 'User-Agent': UA } });
-  if (!r.ok) return null;
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) }).catch(() => null);
+  if (!r || !r.ok) return null;
   const buf = Buffer.from(await r.arrayBuffer());
   if (buf.length > 512 * 1024 || !isPng(buf)) return null;
   const data = 'data:image/png;base64,' + buf.toString('base64');
@@ -320,13 +321,13 @@ async function fetchTexture(url) {
 async function publicTextures(acc) {
   const empty = { skin: null, slim: false, cape: null };
   if (acc.type === 'ely') {
-    const r = await fetch('https://skinsystem.ely.by/textures/' + encodeURIComponent(acc.name), { headers: { 'User-Agent': UA } });
+    const r = await fetch('https://skinsystem.ely.by/textures/' + encodeURIComponent(acc.name), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
     if (r.status === 404 || r.status === 204) return empty;
     if (!r.ok) throw new Error('Ely.by: не удалось получить скин (' + r.status + ')');
     const j = await r.json().catch(() => ({}));
     return { skin: j.SKIN && j.SKIN.url, slim: !!(j.SKIN && j.SKIN.metadata && j.SKIN.metadata.model === 'slim'), cape: j.CAPE && j.CAPE.url };
   }
-  const r = await fetch('https://sessionserver.mojang.com/session/minecraft/profile/' + String(acc.uuid).replace(/-/g, ''), { headers: { 'User-Agent': UA } });
+  const r = await fetch('https://sessionserver.mojang.com/session/minecraft/profile/' + String(acc.uuid).replace(/-/g, ''), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
   if (r.status === 404 || r.status === 204) return empty;
   if (r.status === 429) throw new Error('Слишком много запросов к Mojang, подождите минуту');
   if (!r.ok) throw new Error('Не удалось получить скин (' + r.status + ')');
@@ -378,7 +379,7 @@ async function msSession(id, force) {
   if (acc.type !== 'microsoft') throw new Error('Менять скин из лаунчера можно только у аккаунта Microsoft');
   const r = await msRefresh(msClientId(), unseal(acc.refresh));
   mutate(x => { const a = x.accounts.find(v => v.id === id); if (a) { a.refresh = seal(r.refresh); a.name = r.profile.name; } });
-  const e = { token: r.mcToken, exp: Date.now() + 20 * 60 * 1000, profile: r.profile };
+  const e = { token: r.mcToken, exp: Date.now() + 60 * 60 * 1000, profile: r.profile };
   tokMem.set(id, e);
   return e;
 }
@@ -393,7 +394,8 @@ async function mcApi(id, method, pathname, { json, form } = {}) {
   let s = await msSession(id);
   const go = () => fetch(MCAPI + pathname, {
     method, body: json ? JSON.stringify(json) : form,
-    headers: { Authorization: 'Bearer ' + s.token, Accept: 'application/json', 'User-Agent': UA, ...(json ? { 'Content-Type': 'application/json' } : {}) }
+    headers: { Authorization: 'Bearer ' + s.token, Accept: 'application/json', 'User-Agent': UA, ...(json ? { 'Content-Type': 'application/json' } : {}) },
+    signal: AbortSignal.timeout(15000)
   });
   let r = await go();
   if (r.status === 401) { s = await msSession(id, true); r = await go(); }
@@ -402,8 +404,8 @@ async function mcApi(id, method, pathname, { json, form } = {}) {
   return j;
 }
 
-/* Всё, что нужно окну «Скин и плащ» */
-async function skinProfile(id) {
+/* Всё, что нужно окну «Скин и плащ». Текстуры скина и плащей качаются одновременно, а не по очереди */
+async function loadProfile(id) {
   const acc = findAcc(id);
   const base = { id, type: acc.type, name: acc.name };
   if (acc.type === 'offline') return { ...base, canEdit: false, skin: null, slim: false, capes: [] };
@@ -412,23 +414,43 @@ async function skinProfile(id) {
       const p = await mcApi(id, 'GET', '/minecraft/profile');
       const sk = (p.skins || []).find(x => x.state === 'ACTIVE') || null;
       const slim = !!sk && String(sk.variant).toUpperCase() === 'SLIM';
-      const skin = sk ? await fetchTexture(sk.url) : null;
-      const capes = await Promise.all((p.capes || []).map(async c => ({ id: c.id, alias: c.alias || '', active: c.state === 'ACTIVE', img: await fetchTexture(c.url) })));
+      const [skin, capes] = await Promise.all([
+        sk ? fetchTexture(sk.url) : null,
+        Promise.all((p.capes || []).map(async c => ({ id: c.id, alias: c.alias || '', active: c.state === 'ACTIVE', img: await fetchTexture(c.url) })))
+      ]);
       rememberHead(id, { skin, slim });
       return { ...base, canEdit: true, skin, slim, capes };
     } catch (e) {
       // без входа в Mojang показываем то, что видно всем, но менять нельзя
       const t = await publicTextures(acc).catch(() => null);
       if (!t) throw e;
-      const cape = t.cape ? await fetchTexture(t.cape) : null;
-      return { ...base, canEdit: false, warning: e.message, skin: t.skin ? await fetchTexture(t.skin) : null, slim: !!t.slim, capes: cape ? [{ id: 'current', alias: '', active: true, img: cape }] : [] };
+      const [skin, cape] = await Promise.all([t.skin ? fetchTexture(t.skin) : null, t.cape ? fetchTexture(t.cape) : null]);
+      return { ...base, canEdit: false, warning: e.message, skin, slim: !!t.slim, capes: cape ? [{ id: 'current', alias: '', active: true, img: cape }] : [] };
     }
   }
   const t = await publicTextures(acc);
-  const skin = t.skin ? await fetchTexture(t.skin) : null;
-  const cape = t.cape ? await fetchTexture(t.cape) : null;
+  const [skin, cape] = await Promise.all([t.skin ? fetchTexture(t.skin) : null, t.cape ? fetchTexture(t.cape) : null]);
   rememberHead(id, { skin, slim: !!t.slim });
   return { ...base, canEdit: false, web: 'https://ely.by/skins', skin, slim: !!t.slim, capes: cape ? [{ id: 'current', alias: '', active: true, img: cape }] : [] };
+}
+const profMem = new Map();    // id → последний полученный профиль: окно открывается сразу, свежие данные догружаются
+const profBusy = new Map();   // id → уже идущий запрос (не дублируем)
+function fetchProfile(id) {
+  return loadProfile(id).then(v => { profMem.set(id, v); return v; });
+}
+function skinProfile(id) {
+  let p = profBusy.get(id);
+  if (!p) { p = fetchProfile(id).finally(() => profBusy.delete(id)); profBusy.set(id, p); }
+  return p;
+}
+function skinCached(id) { return profMem.get(id) || null; }
+/* Заранее, в фоне: токен Minecraft и текстуры будут готовы к тому моменту, как откроют окно скина */
+function prewarmSkin() {
+  try {
+    const d = load();
+    const a = d.accounts.find(x => x.id === d.selected);
+    if (a && a.type !== 'offline') skinProfile(a.id).catch(() => {});
+  } catch { /* не критично */ }
 }
 
 /* Загрузка скина из файла PNG (64×64 или 64×32) */
@@ -441,17 +463,17 @@ async function skinUpload(id, buf, variant) {
   fd.append('variant', variant === 'slim' ? 'slim' : 'classic');
   fd.append('file', new Blob([buf], { type: 'image/png' }), 'skin.png');
   await mcApi(id, 'POST', '/minecraft/profile/skins', { form: fd });
-  return skinProfile(id);
+  return fetchProfile(id);
 }
 async function skinReset(id) {
   await mcApi(id, 'DELETE', '/minecraft/profile/skins/active');
-  return skinProfile(id);
+  return fetchProfile(id);
 }
 /* capeId = null, плащ снимается */
 async function capeSet(id, capeId) {
   if (capeId) await mcApi(id, 'PUT', '/minecraft/profile/capes/active', { json: { capeId: String(capeId) } });
   else await mcApi(id, 'DELETE', '/minecraft/profile/capes/active');
-  return skinProfile(id);
+  return fetchProfile(id);
 }
 
 /* ---------- данные выбранного аккаунта для запуска ---------- */
@@ -480,6 +502,6 @@ async function accountForLaunch() {
 module.exports = {
   init, getSettings, setSettings, publicSettings, getCurseKey,
   list, select, remove, addOffline, elyLogin, msStart, msCancel, accountForLaunch,
-  skinHead, skinProfile, skinUpload, skinReset, capeSet,
+  skinHead, skinProfile, skinCached, prewarmSkin, skinUpload, skinReset, capeSet,
   _t: { offlineUuid, seal, unseal, elyError, migrate }
 };

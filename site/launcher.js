@@ -12,7 +12,8 @@
 
   const S = {
     mcs: [], instances: [], versions: null, settings: {}, sys: null, logs: [], ms: null,
-    sel: null, shots: [], shotsLoaded: false, dlg: null, timer: null, accTab: 'ely', lo: {}, heads: {}, sk: null
+    sel: null, shots: [], shotsLoaded: false, dlg: null, timer: null, accTab: 'ely', lo: {}, heads: {}, sk: null,
+    starting: new Set()   // экземпляры, у которых игра запускается, но окно Minecraft ещё не появилось
   };
   try { S.sel = localStorage.getItem('modmatrix:sel'); } catch (e) { /* без хранилища */ }
 
@@ -259,7 +260,14 @@
       else if (p.key && p.key.startsWith('launch:')) setProgress('lcPlayBar', 'lcPlayStat', p.text, p.pct);
     });
     mm.on('game-log', g => pushLog(g.line));
+    // окно Minecraft появилось: «Запуск…» → «Запущено»
+    mm.on('game-window', async g => {
+      S.starting.delete(g.id);
+      await reloadInstances();
+      if (onHome()) { paintPlay(); const t = $id('lcPlayStat'); if (t) t.textContent = gameStatText(g.id); const b = $id('lcPlayBar'); if (b) b.hidden = true; }
+    });
     mm.on('game-exit', async g => {
+      S.starting.delete(g.id);
       pushLog(`Игра завершена (код ${g.code})`);
       await reloadInstances();
       if (onHome()) render();
@@ -403,7 +411,7 @@
             <div class="lc-stat" id="lcPlayStat" role="status"></div>
             <progress id="lcPlayBar" max="100" value="0" hidden></progress>
             <button class="btn lc-folder" data-act="game-folder" type="button" title="Открыть папку игры" aria-label="Открыть папку игры" ${inst ? '' : 'disabled'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6c.4 0 .8.2 1.1.5L11.7 7H19.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg></button>
-            <button class="btn primary lc-play" data-act="play" type="button" ${inst && !inst.running ? '' : 'disabled'}>${inst && inst.running ? 'Запущено' : 'Играть'}</button>
+            <button class="btn primary lc-play" data-act="play" type="button" ${inst && !inst.running && !S.starting.has(inst.id) ? '' : 'disabled'}>${playLabel(inst)}</button>
           </div>
         </footer>
       </section>`;
@@ -432,21 +440,41 @@
     if (S.shotsLoaded) startSlides(); else loadShots();
   }
 
+  /* Надпись на кнопке: «Играть» → «Запуск…» (пока грузится) → «Запущено» (когда появилось окно Minecraft) */
+  function playLabel(inst) {
+    if (!inst) return 'Играть';
+    if (S.starting.has(inst.id)) return 'Запуск…';
+    return inst.running ? 'Запущено' : 'Играть';
+  }
+  function paintPlay() {
+    const inst = cur();
+    const btn = document.querySelector('.lc-play'); if (!btn || !inst) return;
+    btn.textContent = playLabel(inst);
+    btn.disabled = !!inst.running || S.starting.has(inst.id);
+  }
+  function gameStatText(id) {
+    if (S.starting.has(id)) return 'Запуск игры…';
+    const a = selectedAcc();
+    return 'Игра запущена' + (a ? ` · ${a.name}` : '');
+  }
+
   async function play(btn) {
     const inst = cur();
     if (!inst) return;
     if (!S.mcs.length) { note('Сначала войдите в игровой аккаунт'); openDlg('accounts'); return; }
-    btn.disabled = true;
+    S.starting.add(inst.id);
+    paintPlay();                                   // сразу «Запуск…», пока готовятся файлы
     const stat = $id('lcPlayStat'); if (stat) stat.textContent = 'Подготовка к запуску…';
     try {
       await call('inst:launch', inst.id);
       await reloadInstances();
-      render();
-      const a = selectedAcc();
-      const t = $id('lcPlayStat'); if (t) t.textContent = 'Игра запущена' + (a ? ` · ${a.name}` : '');
+      render();                                    // кнопка останется «Запуск…» до появления окна игры
+      const t = $id('lcPlayStat'); if (t) t.textContent = gameStatText(inst.id);
     } catch (err) {
-      btn.disabled = false;
-      if (stat) stat.textContent = err.message;
+      S.starting.delete(inst.id);
+      await reloadInstances();
+      render();
+      const t = $id('lcPlayStat'); if (t) t.textContent = err.message;
       note(err.message);
     }
   }
@@ -637,7 +665,7 @@
           pop.innerHTML = `<div class="lp-pop-h">Версии ${esc(LD[lo.loader])} для Minecraft ${esc(lo.mc)} <button type="button" class="lp-x" data-act="lp-close" data-p="${p}" aria-label="Закрыть">✕</button></div><div class="lp-vlist">` +
             list.map(v => {
               const tags = [v === o.recommended ? 'рекомендуется' : '', v === o.latest && v !== o.recommended ? 'последняя' : '', v === inst ? 'установлена' : ''].filter(Boolean);
-              return `<button type="button" class="lp-v" aria-pressed="${v === lo.version}" data-act="lp-ver" data-p="${p}" data-v="${esc(v)}"><span>${esc(v)}</span>${tags.length ? `<em>${tags.join(', ')}</em>` : ''}</button>`;
+              return `<button type="button" class="lp-v" aria-pressed="${v === lo.version && (p !== 'lcI' || !!lo.picked)}" data-act="lp-ver" data-p="${p}" data-v="${esc(v)}"><span>${esc(v)}</span>${tags.length ? `<em>${tags.join(', ')}</em>` : ''}</button>`;
             }).join('') + '</div>';
           const cur = pop.querySelector('.lp-v[aria-pressed="true"]'); if (cur) cur.scrollIntoView({ block: 'nearest' });
         }
@@ -655,7 +683,10 @@
     if (!b || !lo || !lo.opts) return;
     const inst = lo.installed || {};
     const ver = lo.loader === 'vanilla' ? null : ($id('lcILVer') ? $id('lcILVer').value : lo.version);
-    b.disabled = lo.loader === inst.loader && (ver || null) === (inst.version || null);
+    const same = lo.loader === inst.loader && (ver || null) === (inst.version || null);
+    // в настройках экземпляра версию выбирает сам пользователь: до выбора кнопка не горит
+    b.disabled = same || (lo.loader !== 'vanilla' && !lo.picked);
+    b.classList.toggle('primary', !b.disabled);
   }
 
   /* --- аккаунты --- */
@@ -790,9 +821,11 @@
     if (!k || !k.data) return;
     const p = k.data, token = k;
     try {
-      const skinImg = p.skin ? await loadImg(p.skin) : await steveImage();
       const activeCape = p.capes.find(c => c.active && c.img);
-      const capeImg = activeCape ? await loadImg(activeCape.img) : null;
+      const [skinImg, capeImg] = await Promise.all([
+        p.skin ? loadImg(p.skin) : steveImage(),
+        activeCape ? loadImg(activeCape.img) : null
+      ]);
       if (S.sk !== token) return;
       S.skImgs = { skin: skinImg, cape: capeImg };
       const gl = $id('skGL');
@@ -805,13 +838,13 @@
         drawFigure($id('skFront'), skinImg, null, p.slim, false, 6);
         drawFigure($id('skBack'), skinImg, capeImg, p.slim, true, 6);
       }
-      for (const cv of document.querySelectorAll('[data-cape-img]')) {
+      await Promise.all([...document.querySelectorAll('[data-cape-img]')].map(async cv => {
         const c = p.capes.find(x => x.id === cv.dataset.capeImg);
-        if (!c || !c.img) continue;
+        if (!c || !c.img) return;
         const im = await loadImg(c.img); if (S.sk !== token) return;
         const kc = im.width / 64, x = cv.getContext('2d'); x.imageSmoothingEnabled = false;
         x.drawImage(im, 1 * kc, 1 * kc, 10 * kc, 16 * kc, 0, 0, 10, 16);
-      }
+      }));
     } catch (e) { /* картинка не загрузилась, остаётся пустой предпросмотр */ }
   }
   /* Стив нужен как запасной скин: в нём рисуется только голова, остальное заливается цветом */
@@ -833,11 +866,30 @@
     const a = id ? S.mcs.find(m => m.id === id) : selectedAcc();
     if (!a) { S.sk = null; if (S.dlg && S.dlg.kind === 'skins') $id('lcDlg').close(); return; }
     const k = S.sk = { id: a.id, loading: true, data: null, error: '', busy: false };
+    // уже загружавшийся профиль показываем сразу, свежие данные подтянутся следом
+    const cached = await call('skin:cached', a.id).catch(() => null);
+    if (S.sk !== k) return;
+    if (cached) { k.data = cached; k.loading = false; }
     if (S.dlg && S.dlg.kind === 'skins') paintDlg();
-    try { k.data = await call('skin:profile', a.id); if (k.data && k.data.skin !== undefined) setHead(a.id, k.data); }
-    catch (ex) { k.error = ex.message; }
+    try {
+      const fresh = await call('skin:profile', a.id);
+      if (S.sk !== k) return;
+      const same = cached && k.data === cached && sameProfile(cached, fresh);
+      k.data = fresh; k.error = '';
+      if (fresh && fresh.skin !== undefined) setHead(a.id, fresh);
+      k.loading = false;
+      if (same) return;      // ничего не изменилось, окно не перерисовываем
+    } catch (ex) {
+      if (cached && k.data) { k.loading = false; return; }   // сеть недоступна, остаётся то, что показано
+      k.error = ex.message;
+    }
     k.loading = false;
     if (S.sk === k && S.dlg && S.dlg.kind === 'skins') paintDlg();
+  }
+  function sameProfile(a, b) {
+    if (!a || !b) return false;
+    const key = p => JSON.stringify([p.canEdit, p.slim, p.skin, p.warning || '', (p.capes || []).map(c => [c.id, c.active, c.img])]);
+    return key(a) === key(b);
   }
   /* изменение скина или плаща: одна общая обёртка */
   async function skinChange(channel, arg, okText) {
@@ -1108,6 +1160,7 @@
     const d = ensureDlg();
     const k = S.dlg && S.dlg.kind;
     if (!k) return;
+    d.dataset.kind = k;
     if (k === 'skins') {
       const a = selectedAcc();
       d.innerHTML = head('Скин и плащ', a ? `${a.name} · ${TYPES[a.type] || a.type}` : '') + `<div class="m-body">${skinsBody()}</div>` + foot;
@@ -1168,12 +1221,13 @@
       else if (act === 'lp-loader') {
         const lo = S.lo[b.dataset.p];
         if (lo) {
+          if (lo.loader !== b.dataset.l) lo.picked = false;
           if (lo.loader === b.dataset.l) lo.popOpen = lo.loader !== 'vanilla' && !lo.popOpen;       // повторное нажатие, открыть/закрыть плашку версий
           else { lo.loader = b.dataset.l; lo.version = null; lo.popOpen = lo.loader !== 'vanilla'; if (b.dataset.p === 'lcN') S.lastLoader = lo.loader; }
           paintLoaders(b.dataset.p);
         }
       }
-      else if (act === 'lp-ver') { const lo = S.lo[b.dataset.p]; if (lo) { lo.version = b.dataset.v; lo.popOpen = false; paintLoaders(b.dataset.p); } }
+      else if (act === 'lp-ver') { const lo = S.lo[b.dataset.p]; if (lo) { lo.version = b.dataset.v; lo.picked = true; lo.popOpen = false; paintLoaders(b.dataset.p); } }
       else if (act === 'lp-close') { const lo = S.lo[b.dataset.p]; if (lo) { lo.popOpen = false; paintLoaders(b.dataset.p); } }
       else if (act === 'loader-apply') {
         const lo = S.lo.lcI, inst = S.instances.find(x => x.id === id);

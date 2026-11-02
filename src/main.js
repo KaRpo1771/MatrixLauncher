@@ -76,6 +76,25 @@ function configureDiscord() {
   applyPresence();
 }
 
+/* ---------- сворачивание лаунчера на время игры ----------
+   После появления окна Minecraft лаунчер прячется (и пропадает с панели задач), а когда окно игры
+   сворачивают или игра закрывается, возвращается. Работает только на Windows: там есть слежение за окном игры. */
+const gameMin = new Map();   // id установки → окно игры свёрнуто
+let hiddenByGame = false;
+function hideOnLaunchOn() { return process.platform === 'win32' && !!accounts.getSettings().hideOnLaunch; }
+function hideLauncher() {
+  if (!win || win.isDestroyed() || hiddenByGame) return;
+  hiddenByGame = true; win.setSkipTaskbar(true); win.hide();
+}
+function showLauncher(focus) {
+  if (!win || win.isDestroyed()) return;
+  hiddenByGame = false;
+  win.setSkipTaskbar(false);
+  if (win.isMinimized()) win.restore();
+  win.show();
+  if (focus) win.focus();
+}
+
 function lock(id) {
   if (busy.has(id)) throw new Error('С этой установкой уже идёт операция, дождитесь окончания');
   busy.add(id);
@@ -87,7 +106,7 @@ function registerIpc() {
   handle('mc:list', () => accounts.list());
   handle('mc:addOffline', name => accounts.addOffline(name));
   handle('mc:ely', a => accounts.elyLogin(a));
-  handle('mc:select', id => accounts.select(id));
+  handle('mc:select', id => { const r = accounts.select(id); accounts.prewarmSkin(); return r; });
   handle('mc:remove', id => accounts.remove(id));
   handle('mc:msStart', async () => {
     const { info, wait } = await accounts.msStart();
@@ -101,6 +120,7 @@ function registerIpc() {
   /* --- скин и плащ выбранного аккаунта --- */
   handle('skin:head', id => accounts.skinHead(String(id || '')));
   handle('skin:profile', id => accounts.skinProfile(String(id || '')));
+  handle('skin:cached', id => accounts.skinCached(String(id || '')));
   handle('skin:upload', async ({ id, variant } = {}) => {
     const r = await dialog.showOpenDialog(win, { title: 'Скин Minecraft', properties: ['openFile'], filters: [{ name: 'Картинки', extensions: ['png'] }] });
     if (r.canceled || !r.filePaths.length) return null;
@@ -183,13 +203,22 @@ function registerIpc() {
       const res = await core.launch(inst, account,
         (text, pct) => send('progress', { key: 'launch:' + id, text, pct }),
         line => send('game-log', { id, line }),
-        code => { presence.playing.delete(id); applyPresence(); send('game-exit', { id, code }); });
+        code => {
+          presence.playing.delete(id); gameMin.delete(id); applyPresence(); send('game-exit', { id, code });
+          if (hiddenByGame && !presence.playing.size) showLauncher(true);
+        },
+        () => { send('game-window', { id }); if (hideOnLaunchOn()) { gameMin.set(id, false); hideLauncher(); } },   // окно Minecraft появилось
+        min => {   // окно игры свернули или развернули
+          if (!hideOnLaunchOn() || !presence.playing.has(id)) return;
+          gameMin.set(id, min);
+          if (min) showLauncher(false); else hideLauncher();
+        });
       // в профиле Discord: во что играет и сколько
       const live = core.listInstancesLive().find(x => x.id === id) || inst;
       presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(),
         state: `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${live.modCount ? ` · ${live.modCount} ${plural(live.modCount, 'мод', 'мода', 'модов')}` : ''}` });
       applyPresence();
-      send('progress', { key: 'launch:' + id, text: 'Игра запущена', pct: 1 });
+      send('progress', { key: 'launch:' + id, text: 'Запуск игры…', pct: 1 });
       return res;
     } finally { release(); }
   });
@@ -327,8 +356,9 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  setTimeout(() => accounts.prewarmSkin(), 1500);   // скин и плащ выбранного аккаунта готовятся заранее
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
 app.on('before-quit', () => rpc.destroy());
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.on('second-instance', () => { if (win) { showLauncher(true); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
