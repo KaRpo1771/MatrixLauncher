@@ -39,7 +39,7 @@ function isNewer(a, b) {   // a новее b?
 
 let hooks = { current: () => '0.0.0', emit: () => {}, canRestart: () => null, quit: () => {} };
 const st = { phase: 'idle', current: '', latest: '', notes: '', url: '', canInstall: false, pct: 0, error: '' };
-let asset = null, busy = false;
+let asset = null, busy = false, abortCtl = null;
 
 function set(patch) { Object.assign(st, patch); hooks.emit({ ...st }); }
 const view = () => ({ ...st });
@@ -79,10 +79,10 @@ async function check({ silent = false } = {}) {
   return view();
 }
 
-async function download(a, dest) {
+async function download(a, dest, signal) {
   const base = `https://github.com/${REPO.owner}/${REPO.name}/releases/download/`;
   if (!String(a.browser_download_url).startsWith(base)) throw new Error('Файл обновления размещён на неизвестном сервере');
-  const r = await fetch(a.browser_download_url, { headers: { 'User-Agent': UA }, redirect: 'follow' });
+  const r = await fetch(a.browser_download_url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal });
   if (!r.ok || !r.body) throw new Error('Не удалось скачать обновление (' + r.status + ')');
   const total = Number(r.headers.get('content-length')) || a.size || 0;
   if (total > 400 * MB) throw new Error('Файл обновления слишком большой');
@@ -90,6 +90,8 @@ async function download(a, dest) {
   const out = fs.createWriteStream(dest);
   let got = 0, last = Date.now(), lastPct = -1;
   const src = Readable.fromWeb(r.body);
+  const onAbort = () => { const e = new Error('Загрузка отменена'); e.cancelled = true; src.destroy(e); out.destroy(); };
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   const stall = setInterval(() => { if (Date.now() - last > 30000) src.destroy(new Error('Загрузка зависла: 30 секунд нет данных')); }, 5000);
   try {
     await new Promise((ok, no) => {
@@ -102,7 +104,7 @@ async function download(a, dest) {
       src.on('error', no); out.on('error', no); out.on('finish', ok);
       src.pipe(out);
     });
-  } finally { clearInterval(stall); }
+  } finally { clearInterval(stall); if (signal) signal.removeEventListener('abort', onAbort); }
   if (a.size && got !== a.size) throw new Error('Файл скачан не полностью, попробуйте ещё раз');
   const want = String(a.digest || '').replace(/^sha256:/i, '').toLowerCase();
   if (want && hash.digest('hex') !== want) throw new Error('Контрольная сумма обновления не совпала');
@@ -120,8 +122,10 @@ async function install() {
   try {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
+    abortCtl = new AbortController();
     set({ phase: 'downloading', pct: 0, error: '' });
-    await download(asset, file);
+    await download(asset, file, abortCtl.signal);
+    if (abortCtl.signal.aborted) { const e = new Error('Загрузка отменена'); e.cancelled = true; throw e; }
     set({ phase: 'installing', pct: 100 });
     // Установщик ставит тихо поверх (--updated), а после него cmd сам запускает лаунчер:
     // если установщик уже открыл его, второй экземпляр просто закроется (блокировка единственного экземпляра).
@@ -132,12 +136,20 @@ async function install() {
     setTimeout(() => hooks.quit(), 800);
   } catch (e) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* не критично */ }
-    set({ phase: 'available', pct: 0, error: e.message });
-    throw e;
-  } finally { busy = false; }
+    const cancelled = !!(e && e.cancelled) || (abortCtl && abortCtl.signal.aborted) || e.name === 'AbortError';
+    // отмена — это не ошибка: баннер возвращается к «Доступна версия…» и обновление можно запустить заново
+    set({ phase: 'available', pct: 0, error: cancelled ? '' : e.message });
+    if (!cancelled) throw e;
+  } finally { busy = false; abortCtl = null; }
+  return view();
+}
+
+/* Отменить скачивание обновления (после запуска установщика отменить уже нельзя) */
+function cancel() {
+  if (st.phase === 'downloading' && abortCtl) abortCtl.abort();
   return view();
 }
 
 function init(h) { hooks = { ...hooks, ...h }; st.current = hooks.current(); }
 
-module.exports = { init, check, install, state: view, _t: { isNewer, parseVer, repoFromPackage } };
+module.exports = { init, check, install, cancel, state: view, _t: { isNewer, parseVer, repoFromPackage } };

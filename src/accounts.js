@@ -59,6 +59,15 @@ function setSettings(patch) {
   const cur = getSettings();
   for (const k of ['msClientId']) if (patch && k in patch) cur[k] = String(patch[k] || '').trim();
   if (patch && 'discordEnabled' in patch) cur.discordEnabled = !!patch.discordEnabled;
+  if (patch && 'discordHideServer' in patch) cur.discordHideServer = !!patch.discordHideServer;
+  if (patch && patch.discordOpts && typeof patch.discordOpts === 'object') {   // расширенные настройки статуса: только известные булевы ключи
+    const keys = ['showHost', 'showWorld', 'showBiome', 'showPlace', 'showAction', 'showWeather', 'showHealth', 'showEvents', 'showAfk', 'showCoords', 'showInstance', 'showTimer', 'showLauncher'];
+    const o = { ...(cur.discordOpts || {}) };
+    for (const k of keys) if (k in patch.discordOpts) o[k] = !!patch.discordOpts[k];
+    // старая настройка заменена новым ключом showHost
+    if ('showHost' in patch.discordOpts) delete cur.discordHideServer;
+    cur.discordOpts = o;
+  }
   if (patch && 'hideOnLaunch' in patch) cur.hideOnLaunch = !!patch.hideOnLaunch;
   // ключ CurseForge хранится зашифрованным и в интерфейс не отдаётся
   if (patch && 'curseforgeKey' in patch) {

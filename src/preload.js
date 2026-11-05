@@ -1,7 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
 
-const EVENTS = new Set(['progress', 'game-log', 'game-exit', 'game-window', 'ms-result', 'fs-change', 'win-state', 'update-state']);
+const EVENTS = new Set(['progress', 'game-log', 'game-exit', 'game-crash', 'game-window', 'ms-result', 'fs-change', 'win-state', 'update-state']);
 
 contextBridge.exposeInMainWorld('mm', {
   platform: process.platform,

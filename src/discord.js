@@ -67,7 +67,7 @@ class DiscordPresence {
     this.activity = a ? {
       details: clip(a.details), state: clip(a.state),
       ...(a.start ? { timestamps: { start: Math.floor(a.start / 1000) } } : {}),
-      assets: { large_image: LOGO_URL || 'logo', large_text: 'MatrixL' }
+      assets: { large_image: LOGO_URL || 'logo', large_text: clip(a.largeText) || 'MatrixL' }
     } : null;
     this._flush();
   }

@@ -266,16 +266,19 @@
       await reloadInstances();
       if (onHome()) { paintPlay(); const t = $id('lcPlayStat'); if (t) t.textContent = gameStatText(g.id); const b = $id('lcPlayBar'); if (b) b.hidden = true; }
     });
+    // игра упала: окно с отчётом и ссылками на нейросети
+    mm.on('game-crash', c => { S.crash = c; pushLog(`Игра упала (код ${c.code})`); openDlg('crash', c); });
     mm.on('game-exit', async g => {
       S.starting.delete(g.id);
       pushLog(`Игра завершена (код ${g.code})`);
       await reloadInstances();
       if (onHome()) render();
-      note(g.code === 0 ? 'Игра закрыта' : `Игра завершилась с кодом ${g.code}, подробности в журнале`);
+      if (g.code === 0) note('Игра закрыта');
     });
     // новая версия лаунчера: уведомление и точка у «Настроек», обновляется кнопкой в настройках
     mm.on('update-state', onUpdateState);
     const ub = $id('updBtn'); if (ub) ub.onclick = updateClick;
+    const uc = $id('updCancel'); if (uc) uc.onclick = async () => { uc.disabled = true; try { await call('update:cancel'); } catch (ex) { note(ex.message); } uc.disabled = false; };
     call('update:state').then(onUpdateState).catch(() => {});
     mm.on('ms-result', r => {
       S.ms = null;
@@ -302,10 +305,11 @@
     box.hidden = !show;
     if (!show) return;
     const t = $id('updTitle'), sub = $id('updSub'), btn = $id('updBtn'), bar = $id('updBar');
-    bar.hidden = true; btn.hidden = false; btn.disabled = false;
+    const cb = $id('updCancel');
+    bar.hidden = true; btn.hidden = false; btn.disabled = false; if (cb) cb.hidden = true;
     if (ph === 'downloading') {
       t.textContent = 'Скачиваю обновление…'; sub.textContent = `${u.pct || 0}%`;
-      bar.hidden = false; bar.value = u.pct || 0; btn.hidden = true;
+      bar.hidden = false; bar.value = u.pct || 0; btn.hidden = true; if (cb) cb.hidden = false;
     } else if (ph === 'installing') {
       t.textContent = 'Устанавливаю обновление'; sub.textContent = 'Лаунчер сейчас перезапустится'; btn.hidden = true;
       bar.hidden = false; bar.value = 100;
@@ -689,6 +693,35 @@
     b.classList.toggle('primary', !b.disabled);
   }
 
+  /* --- окно падения игры --- */
+  const AI_LINKS = [
+    { id: 'chatgpt', name: 'ChatGPT', url: 'https://chatgpt.com/' },
+    { id: 'claude', name: 'Claude', url: 'https://claude.ai/new' },
+    { id: 'gemini', name: 'Gemini', url: 'https://gemini.google.com/app' },
+    { id: 'deepseek', name: 'DeepSeek', url: 'https://chat.deepseek.com/' }
+  ];
+  function crashBody(c) {
+    return `<div class="banner err"><b>Minecraft закрылся из-за ошибки</b>${esc(c.summary || 'Игра завершилась аварийно (код ' + c.code + ').')}</div>
+      <pre class="lc-log crash-log" id="crashLog" tabindex="0">${esc(c.text)}</pre>
+      <div class="lc-install crash-act">
+        <button class="btn primary" data-act="crash-copy" type="button">Скопировать отчёт</button>
+        ${c.hasFile ? '<button class="btn" data-act="crash-reveal" type="button">Показать файл</button>' : ''}
+      </div>
+      <h4 class="sk-h crash-ai-h">Спросить у ИИ</h4>
+      <div class="ai-links">${AI_LINKS.map(a => `<a class="ai-link" href="${a.url}" target="_blank" rel="noopener" data-act="crash-ai" data-ai="${a.id}">
+        <span class="ai-ico ai-${a.id}"><img src="ai/${a.id}.png" alt="" width="28" height="28"></span><span>${a.name}</span></a>`).join('')}</div>`;
+  }
+  async function copyCrash() {
+    const t = S.crash ? S.crash.text : '';
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch {
+      const el = $id('crashLog'); if (!el) return false;
+      const r = document.createRange(); r.selectNodeContents(el);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      try { return document.execCommand('copy'); } catch { return false; }
+    }
+  }
+
   /* --- аккаунты --- */
   function accountsBody() {
     const rows = S.mcs.length ? S.mcs.map(a => `
@@ -696,7 +729,7 @@
         <div class="lc-acc-id">${avatar(a)}<div><h3>${esc(a.name)}</h3><span class="by">${esc(TYPES[a.type] || a.type)}${a.selected ? ' · выбран для игры' : ''}</span></div></div>
         <div class="lc-install">
           ${a.selected ? '' : `<button class="btn" data-act="mc-select" data-id="${esc(a.id)}" type="button">Выбрать</button>`}
-          <button class="btn danger" data-act="mc-remove" data-id="${esc(a.id)}" type="button">Убрать</button>
+          <button class="btn danger" data-act="mc-remove" data-id="${esc(a.id)}" type="button">${a.type === 'offline' ? 'Удалить' : 'Выйти'}</button>
         </div>
       </div>`).join('') : '<p class="filter-note">Аккаунтов пока нет. Войдите через Ely.by, чтобы в игре были скины, либо добавьте другой аккаунт.</p>';
 
@@ -847,18 +880,48 @@
       }));
     } catch (e) { /* картинка не загрузилась, остаётся пустой предпросмотр */ }
   }
-  /* Стив нужен как запасной скин: в нём рисуется только голова, остальное заливается цветом */
+  /* Стив: запасной скин оффлайн-аккаунта. Рисуется целиком, по настоящей раскладке текстуры 64×64
+     (каждая часть тела — коробка с шестью гранями), поэтому в 3D-просмотре выглядит как обычный Стив. */
   function steveImage() {
     const c = document.createElement('canvas'); c.width = 64; c.height = 64;
     const x = c.getContext('2d');
-    const fill = (col, rx, ry, w, h) => { x.fillStyle = col; x.fillRect(rx, ry, w, h); };
-    [[8, 8, 8, 8], [24, 8, 8, 8]].forEach(([rx, ry, w, h]) => fill('#b78a68', rx, ry, w, h));
-    fill('#4a3020', 8, 8, 8, 2); fill('#4a3020', 24, 8, 8, 8);
-    fill('#3b8f8b', 20, 20, 8, 12); fill('#3b8f8b', 32, 20, 8, 12);       // тело
-    fill('#b78a68', 44, 20, 4, 12); fill('#b78a68', 52, 20, 4, 12); fill('#b78a68', 36, 52, 4, 12); fill('#b78a68', 44, 52, 4, 12);
-    fill('#3b3b8f', 4, 20, 4, 12); fill('#3b3b8f', 12, 20, 4, 12); fill('#3b3b8f', 20, 52, 4, 12); fill('#3b3b8f', 28, 52, 4, 12);
-    x.fillStyle = '#fff'; x.fillRect(9, 11, 2, 1); x.fillRect(13, 11, 2, 1);
-    x.fillStyle = '#3d3a8a'; x.fillRect(9, 11, 1, 1); x.fillRect(14, 11, 1, 1);
+    const SKIN = '#b78a68', SKIN_D = '#a37858', HAIR = '#3a2a1a', SHIRT = '#2fa7a7', SHIRT_D = '#258b8b', PANTS = '#3b3b8f', SHOE = '#6b6b6b';
+    const px = (col, rx, ry, w = 1, h = 1) => { x.fillStyle = col; x.fillRect(rx, ry, w, h); };
+    // раскладка коробки w×h×d с углом (u, v): верх, низ, правая, передняя, левая, задняя грани
+    const faces = (u, v, w, h, d) => ({
+      top: [u + d, v, w, d], bottom: [u + d + w, v, w, d],
+      right: [u, v + d, d, h], front: [u + d, v + d, w, h], left: [u + d + w, v + d, d, h], back: [u + 2 * d + w, v + d, w, h]
+    });
+    const paint = (f, name, col) => px(col, ...f[name]);
+
+    // голова 8×8×8
+    const hd = faces(0, 0, 8, 8, 8);
+    ['top', 'back', 'right', 'left'].forEach(n => paint(hd, n, HAIR));
+    paint(hd, 'bottom', SKIN_D); paint(hd, 'front', SKIN);
+    px(SKIN, 0, 8 + 3, 8, 5); px(SKIN, 8, 8 + 3, 8, 5); px(SKIN, 16, 8 + 3, 8, 5);   // лицо с боков ниже волос
+    px(HAIR, 8, 8, 8, 2); px(HAIR, 8, 10, 1, 1); px(HAIR, 15, 10, 1, 1);                                        // чёлка спереди
+    px('#ffffff', 9, 12, 2, 1); px('#ffffff', 13, 12, 2, 1);                                                      // глаза
+    px('#3d3a8a', 10, 12, 1, 1); px('#3d3a8a', 13, 12, 1, 1);
+    px('#8d5d41', 11, 13, 2, 1); px('#8d5d41', 10, 14, 4, 1); px('#6e3f2d', 11, 14, 2, 1);                       // нос и рот
+    px(HAIR, 8, 13, 1, 1); px(HAIR, 15, 13, 1, 1);
+
+    // тело 8×12×4: рубашка
+    const bd = faces(16, 16, 8, 12, 4);
+    for (const n of Object.keys(bd)) paint(bd, n, n === 'front' || n === 'back' ? SHIRT : SHIRT_D);
+    // руки 4×12×4: рукав сверху, кисть кожей
+    for (const [u, v] of [[40, 16], [32, 48]]) {
+      const ar = faces(u, v, 4, 12, 4);
+      for (const n of Object.keys(ar)) paint(ar, n, n === 'top' || n === 'bottom' ? SKIN_D : SKIN);
+      for (const n of ['right', 'front', 'left', 'back']) { const [rx, ry, rw] = ar[n]; px(SHIRT, rx, ry, rw, 4); }
+      px(SHIRT, ...ar.top);
+    }
+    // ноги 4×12×4: штаны и ботинки
+    for (const [u, v] of [[0, 16], [16, 48]]) {
+      const lg = faces(u, v, 4, 12, 4);
+      for (const n of Object.keys(lg)) paint(lg, n, PANTS);
+      for (const n of ['right', 'front', 'left', 'back']) { const [rx, ry, rw, rh] = lg[n]; px(SHOE, rx, ry + rh - 2, rw, 2); }
+      paint(lg, 'bottom', SHOE);
+    }
     return loadImg(c.toDataURL());
   }
 
@@ -1194,6 +1257,10 @@
     } else if (k === 'compat') {
       const a = S.dlg.arg;
       d.innerHTML = head('Проверка совместимости', a.name ? `Установка «${a.name}»` : '') + `<div class="m-body">${compatHTML(a.issues, { note: `Проверено файлов в папке mods: ${a.scanned}. Исправить можно в «Настройки экземпляра» → «Моды в этой установке».` })}</div>` + foot;
+    } else if (k === 'crash') {
+      const c = S.dlg.arg;
+      d.innerHTML = head('Игра завершилась с ошибкой', `${c.name}${c.mc ? ' · ' + c.mc : ''}${c.loader && c.loader !== 'vanilla' ? ' · ' + c.loader : ''}`) + `<div class="m-body">${crashBody(c)}</div>` + foot;
+      const el = $id('crashLog'); if (el) requestAnimationFrame(() => { el.scrollTop = 0; });
     } else if (k === 'log') {
       d.innerHTML = head('Журнал', 'Сообщения лаунчера и игры') + '<div class="m-body"><pre class="lc-log" id="lcLog"></pre></div>' + foot;
       const el = $id('lcLog'); el.textContent = S.logs.length ? S.logs.join('\n') + '\n' : 'Пока пусто.';
@@ -1208,6 +1275,9 @@
     const id = b.dataset.id, act = b.dataset.act;
     try {
       if (act === 'dclose') $id('lcDlg').close();
+      else if (act === 'crash-copy') note(await copyCrash() ? 'Отчёт скопирован' : 'Не удалось скопировать, выделите текст вручную');
+      else if (act === 'crash-reveal') await call('crash:reveal');
+      else if (act === 'crash-ai') { if (await copyCrash()) note('Отчёт скопирован'); return; }   // ссылка откроется сама
       else if (act === 'tab') { S.accTab = b.dataset.tab; paintDlg(); }
       else if (act === 'icon-pick') { const r = await call('inst:pickIcon', id); if (r) { await reloadInstances(); render(); paintDlg(); note('Аватарка обновлена'); } }
       else if (act === 'new') openDlg('create');
@@ -1254,7 +1324,11 @@
       else if (act === 'mc-select') { S.mcs = await call('mc:select', id); afterAccountsChange(); }
       else if (act === 'mc-remove') {
         const acc = S.mcs.find(x => x.id === id);
-        if (!(await ask({ title: 'Убрать аккаунт?', text: `Аккаунт «${acc ? acc.name : ''}» исчезнет из лаунчера. Саму учётную запись это не удалит.`, ok: 'Убрать', danger: true }))) return;
+        const off = !acc || acc.type === 'offline';
+        const ok = await ask(off
+          ? { title: 'Удалить аккаунт?', text: `Оффлайн-аккаунт «${acc ? acc.name : ''}» будет удалён из лаунчера.`, ok: 'Удалить', danger: true }
+          : { title: 'Выйти из аккаунта?', text: `Лаунчер выйдет из аккаунта «${acc.name}» (${TYPES[acc.type] || acc.type}). Саму учётную запись это не удалит, войти можно снова.`, ok: 'Выйти', danger: true });
+        if (!ok) return;
         S.mcs = await call('mc:remove', id); afterAccountsChange();
       }
       else if (act === 'task-cancel') await cancelTask(b.dataset.key || 'task:create');

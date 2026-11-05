@@ -6,6 +6,9 @@ const { pathToFileURL } = require('url');
 const core = require('./core');
 const accounts = require('./accounts');
 const updater = require('./updater');
+const { LaunchLog } = require('./crashlog');
+const activity = require('./activity');
+const worldinfo = require('./worldinfo');
 let CURSEFORGE_KEY = process.env.CURSEFORGE_API_KEY || '';
 try { CURSEFORGE_KEY = require('./curseforge-key') || CURSEFORGE_KEY; } catch { /* файла нет (чистый клон репозитория): CurseForge будет отключён */ }
 let DISCORD_APP_ID = process.env.DISCORD_APP_ID || '';
@@ -51,9 +54,13 @@ function instLine(i) {
 function applyPresence() {
   if (presence.playing.size) {
     const g = [...presence.playing.values()].pop();
-    rpc.set({ details: `Играет в Minecraft ${g.mc}`, state: g.state, start: g.start });
+    const o = activity.resolveOpts(accounts.getSettings());
+    const d = g.live ? activity.describe(g.live, g.inst, o) : { details: `Играет в Minecraft ${g.mc}`, state: g.state };
+    rpc.set({ details: d.details, state: d.state || g.state, start: o.showTimer ? g.start : 0, largeText: d.largeText });
   } else if (presence.tasks.size) {
-    rpc.set({ details: [...presence.tasks.values()].pop(), state: instLine(presence.inst), start: startedAt });
+    rpc.set({ details: [...presence.tasks.values()].pop(), state: instLine(presence.inst), start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
+  } else if (!activity.resolveOpts(accounts.getSettings()).showLauncher) {
+    rpc.set({ details: 'В лаунчере MatrixL', start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
   } else {
     let details = PAGE_TITLE[presence.page] || PAGE_TITLE.home;
     let state;
@@ -61,7 +68,7 @@ function applyPresence() {
     if (CATALOG_PAGES.has(presence.page)) { if (presence.gv) details += ` | ${presence.gv}`; }
     else if (presence.page === 'home') state = instLine(presence.inst);
     else if (presence.page === 'favorites' && presence.favs) state = `${presence.favs} ${plural(presence.favs, 'карточка', 'карточки', 'карточек')} в избранном`;
-    rpc.set({ details, state, start: startedAt });
+    rpc.set({ details, state, start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
   }
 }
 let taskSeq = 0;
@@ -77,10 +84,11 @@ function configureDiscord() {
 }
 
 /* ---------- сворачивание лаунчера на время игры ----------
-   После появления окна Minecraft лаунчер прячется (и пропадает с панели задач), а когда окно игры
-   сворачивают или игра закрывается, возвращается. Работает только на Windows: там есть слежение за окном игры. */
+   После появления окна Minecraft лаунчер прячется (и пропадает с панели задач) и остаётся скрытым,
+   пока игра не закроется полностью (сворачивание окна игры его не возвращает). Работает только на Windows: там есть слежение за окном игры. */
 const gameMin = new Map();   // id установки → окно игры свёрнуто
 let hiddenByGame = false;
+let lastCrash = null;   // последний отчёт о падении игры (для кнопки «Показать файл»)
 function hideOnLaunchOn() { return process.platform === 'win32' && !!accounts.getSettings().hideOnLaunch; }
 function hideLauncher() {
   if (!win || win.isDestroyed() || hiddenByGame) return;
@@ -138,10 +146,24 @@ function registerIpc() {
   handle('win:minimize', () => { if (win) win.minimize(); });
 
   /* --- настройки и сведения о компьютере --- */
+  /* предпросмотр статуса для окна расширенных настроек: два примера (одиночная игра и сервер) с текущими опциями */
+  handle('discord:preview', () => {
+    const o = activity.resolveOpts(accounts.getSettings());
+    const inst = { name: 'Мой экземпляр', mc: '1.20.1', loader: 'fabric' };
+    const world = { name: 'Новый мир', gamemode: 0, hardcore: false, dim: 'overworld', pos: [120, 28, -64], biome: 'minecraft:dripstone_caves', held: 'iron_pickaxe', health: 20, dayTime: 15000, raining: false, thundering: false, elytra: false, riding: false };
+    const ev = { text: 'Получил достижение «Каменный век»', until: Date.now() + 1e5 };
+    return {
+      single: activity.describe({ mode: 'single', world, afk: false }, inst, o),
+      afk: activity.describe({ mode: 'single', world, afk: true }, inst, o),
+      event: activity.describe({ mode: 'single', world, afk: false, event: ev }, inst, o),
+      server: activity.describe({ mode: 'server', host: 'mc.example.net', afk: false }, inst, o),
+      timer: o.showTimer
+    };
+  });
   handle('settings:get', () => ({ ...accounts.publicSettings(), discordBuiltIn: !!DISCORD_APP_ID, discordConnected: rpc.active }));
   handle('settings:set', patch => {
     const r = accounts.setSettings(patch || {});
-    if (patch && 'discordEnabled' in patch) configureDiscord();
+    if (patch && ('discordEnabled' in patch || 'discordHideServer' in patch || 'discordOpts' in patch)) configureDiscord();
     return { ...r, discordBuiltIn: !!DISCORD_APP_ID, discordConnected: rpc.active };
   });
   // интерфейс сообщает, на какой странице пользователь
@@ -156,6 +178,16 @@ function registerIpc() {
   handle('update:state', () => updater.state());
   handle('update:check', () => updater.check());
   handle('update:install', () => updater.install());
+  handle('update:cancel', () => updater.cancel());
+  /* --- Java --- */
+  handle('java:status', () => core.javaStatus());
+  handle('java:update', async () => {
+    const release = lock('java');
+    try {
+      return await withTask('Обновляет Java', () => core.startJob(() => core.javaUpdate(
+        (text, pct) => send('progress', { key: 'java', text, pct }))));
+    } finally { release(); }
+  });
   handle('sys:info', () => core.sysInfo());
   handle('app:info', () => ({ version: app.getVersion(), dataDir: core.DIRS.root, platform: process.platform }));
 
@@ -197,30 +229,65 @@ function registerIpc() {
   handle('inst:clearIcon', id => core.clearIcon(id));
   handle('inst:launch', async id => {
     const inst = core.getInstance(id);
+    if (busy.has('java')) throw new Error('Идёт обновление Java, дождитесь окончания');
     const release = lock(id);
     try {
       const account = await accounts.accountForLaunch();
+      const llog = new LaunchLog({ gameDir: core.instDir(id), info: { launcher: 'v' + app.getVersion(), name: inst.name, mc: inst.mc, loader: inst.loader, loaderVersion: inst.loaderVersion } });
+      let exited = false;
+      const live = { mode: 'menu', host: '', world: null, afk: false, titleMode: null };
+      const startedAtMs = Date.now();
+      const refresh = () => { const e = presence.playing.get(id); if (e) applyPresence(); };
+      // название, режим, измерение и биом читаются из файлов мира, пока игрок в одиночной игре
+      const poll = setInterval(() => {
+        if (live.mode !== 'single') return;
+        const w = worldinfo.read(core.instDir(id), startedAtMs);
+        if (w && JSON.stringify(w) !== JSON.stringify(live.world)) { live.world = w; refresh(); }
+      }, 15000);
+      if (poll.unref) poll.unref();
       const res = await core.launch(inst, account,
         (text, pct) => send('progress', { key: 'launch:' + id, text, pct }),
-        line => send('game-log', { id, line }),
+        line => { llog.push(line); send('game-log', { id, line }); if (activity.parseLogLine(line, live, account.name)) { refresh(); if (live.event) { const t = setTimeout(refresh, live.event.until - Date.now() + 500); if (t.unref) t.unref(); } } },
         code => {
-          presence.playing.delete(id); gameMin.delete(id); applyPresence(); send('game-exit', { id, code });
+          if (exited) return; exited = true; clearInterval(poll);
+          presence.playing.delete(id); gameMin.delete(id); applyPresence();
+          let crash = null;
+          try { crash = llog.finish(code); } catch { /* журнал не должен мешать закрытию */ }
+          if (crash) lastCrash = { ...crash, id };
+          send('game-exit', { id, code });
+          // игра упала: лаунчер возвращается из скрытого режима, и сразу показывается окно с отчётом
           if (hiddenByGame && !presence.playing.size) showLauncher(true);
+          if (crash) {
+            if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+            send('game-crash', { id, name: inst.name, mc: inst.mc, loader: inst.loader, code, text: crash.text, summary: crash.summary, hasFile: !!(crash.crashFile || crash.logFile) });
+          }
         },
         () => { send('game-window', { id }); if (hideOnLaunchOn()) { gameMin.set(id, false); hideLauncher(); } },   // окно Minecraft появилось
-        min => {   // окно игры свернули или развернули
-          if (!hideOnLaunchOn() || !presence.playing.has(id)) return;
-          gameMin.set(id, min);
-          if (min) showLauncher(false); else hideLauncher();
-        });
+        null,
+        w => {   // заголовок окна и бездействие игрока (только Windows)
+          if ('afk' in w) live.afk = !!w.afk;
+          if ('title' in w) {
+            const m = activity.modeFromTitle(w.title);
+            if (m) live.titleMode = true;   // эта версия показывает режим в заголовке окна, ему можно верить
+            if (m && m !== live.mode) { live.mode = m; if (m === 'single') live.host = ''; else live.world = null; }
+            else if (!m && live.titleMode && live.mode !== 'menu' && /^Minecraft/i.test(w.title)) { live.mode = 'menu'; live.host = ''; live.world = null; }
+          }
+          refresh();
+        }).catch(e => { clearInterval(poll); try { llog.finish(0); } catch { /* не критично */ } throw e; });   // при включённом «скрывать при запуске» лаунчер остаётся скрытым, пока игра не закроется полностью
       // в профиле Discord: во что играет и сколько
-      const live = core.listInstancesLive().find(x => x.id === id) || inst;
-      presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(),
-        state: `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${live.modCount ? ` · ${live.modCount} ${plural(live.modCount, 'мод', 'мода', 'модов')}` : ''}` });
+      const liveInst = core.listInstancesLive().find(x => x.id === id) || inst;
+      presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(), live, inst: { name: inst.name, mc: inst.mc, loader: inst.loader },
+        state: `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${liveInst.modCount ? ` · ${liveInst.modCount} ${plural(liveInst.modCount, 'мод', 'мода', 'модов')}` : ''}` });
       applyPresence();
       send('progress', { key: 'launch:' + id, text: 'Запуск игры…', pct: 1 });
       return res;
     } finally { release(); }
+  });
+  /* показать в проводнике файл отчёта (или журнала) последнего падения: путь берётся только из памяти, не из окна */
+  handle('crash:reveal', () => {
+    const f = lastCrash && (lastCrash.crashFile || lastCrash.logFile);
+    if (!f || !fs.existsSync(f)) throw new Error('Файл отчёта не найден');
+    shell.showItemInFolder(f);
   });
   handle('inst:folder', async arg => {
     const { id, sub } = typeof arg === 'string' ? { id: arg } : (arg || {});
@@ -245,6 +312,7 @@ function registerIpc() {
   handle('cf:search', p => core.cfSearch(p || {}));
   handle('cf:categories', kind => core.cfCategories(kind));
   handle('cf:details', id => core.cfDetails(id));
+  handle('cf:files', ({ id, total }) => core.cfFiles(id, total));
 
   /* --- сборки .mrpack и CurseForge --- */
   handle('pack:versions', arg => (arg && typeof arg === 'object' && arg.source === 'curseforge' ? core.cfPackVersions(arg.cfId) : core.packVersions(typeof arg === 'object' ? arg.slug : arg)));

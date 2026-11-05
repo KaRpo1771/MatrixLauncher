@@ -1342,18 +1342,18 @@ dialog.lc-dlg:has(.sk-view) .m-body{max-height:calc(100vh - 220px)}
 /* ---------- свои галочки (OptiFine, автоподбор памяти и др.) ---------- */
 input[type="checkbox"]{
   -webkit-appearance:none;appearance:none;flex:none;position:relative;margin:0;cursor:pointer;
-  width:22px;height:22px;border-radius:7px;
+  width:22px;height:22px;border-radius:7px;display:inline-block;vertical-align:middle;
   background:var(--surface-2);border:1.5px solid var(--line-hard);
   transition:background .18s,border-color .18s,box-shadow .18s,transform .12s}
 input[type="checkbox"]::after{
-  content:"";position:absolute;left:6.5px;top:2.5px;width:6px;height:11px;
-  border:solid var(--accent-ink);border-width:0 2.5px 2.5px 0;border-radius:1px;
-  transform:rotate(45deg) scale(0);transform-origin:50% 60%;
-  transition:transform .2s cubic-bezier(.3,1.5,.5,1)}
+  content:"";position:absolute;inset:0;
+  background:no-repeat center/16px 16px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23000' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  opacity:0;transform:scale(.4);
+  transition:transform .2s cubic-bezier(.3,1.5,.5,1),opacity .12s}
 input[type="checkbox"]:hover{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent)}
 input[type="checkbox"]:active{transform:scale(.92)}
 input[type="checkbox"]:checked{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:var(--accent)}
-input[type="checkbox"]:checked::after{transform:rotate(45deg) scale(1)}
+input[type="checkbox"]:checked::after{opacity:1;transform:scale(1)}
 input[type="checkbox"]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
 .checks label,.ram-auto{cursor:pointer;gap:10px;user-select:none}
@@ -1369,6 +1369,12 @@ input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
 .tag .ld-ico,.chip .ld-ico{margin:0;vertical-align:0;flex:none}
 .tag.ld .ld-ico{width:15px;height:15px}
 .tag.ld{padding:3px 9px 3px 7px}
+/* в карточке мода «.spec span» делал чипы блочными и серыми — иконка прилипала к тексту */
+.spec .ld-list{gap:8px 10px}
+.spec .ld-chip{display:inline-flex;align-items:center;gap:8px;font-size:14.5px;line-height:1.2;color:var(--text);padding:3px 10px 3px 7px;border:1px solid var(--line-hard);border-radius:999px;background:var(--surface-2)}
+.spec .ld-chip .ld-ico{width:18px;height:18px;margin:0;flex:none}
+.ld-ico{margin-right:0}
+.upd-cancel{background:transparent}
 
 /* ---------- сворачивание лаунчера ---------- */
 #stHide .dc-ico{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:var(--accent-ink)}
@@ -1377,3 +1383,64 @@ input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
 
 /* ---------- окна установки и настроек экземпляра: шире ---------- */
 dialog.lc-dlg[data-kind="create"],dialog.lc-dlg[data-kind="settings"]{width:min(820px,calc(100vw - 24px))}
+
+/* ---------- окно падения игры ---------- */
+dialog.lc-dlg[data-kind="crash"]{width:min(860px,calc(100vw - 24px))}
+.crash-log{min-height:200px;max-height:42vh;margin:12px 0 0;font-size:12px;user-select:text;color:var(--text)}
+.crash-act{margin-top:12px}
+.ai-links{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:4px}
+.ai-link{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line-hard);border-radius:12px;background:var(--surface-2);color:var(--text);font-weight:600;text-decoration:none;transition:border-color .18s,background .18s,transform .12s}
+.ai-link:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface-2))}
+.ai-link:active{transform:scale(.97)}
+.ai-ico{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:#fff;overflow:hidden}
+.ai-ico img{display:block;width:28px;height:28px;object-fit:contain}
+.ai-ico.ai-claude{background:transparent}
+.ai-ico.ai-claude img{width:40px;height:40px}
+.banner b{display:block;margin-bottom:2px}
+.crash-log{min-height:150px;max-height:30vh}
+.crash-log{min-height:120px;max-height:24vh}
+dialog.lc-dlg[data-kind="crash"] .banner{margin-bottom:6px}
+dialog.lc-dlg[data-kind="crash"] .filter-note{margin:6px 0 0}
+.crash-ai-h{margin:14px 0 8px}
+.crash-ai-h small{margin-left:8px;font:400 12.5px "IBM Plex Sans",sans-serif;color:var(--muted)}
+.ai-links{grid-template-columns:repeat(4,1fr)}
+.ai-link{padding:8px 10px;gap:10px;font-size:14px}
+.ai-ico{width:34px;height:34px}
+.ai-ico img{width:24px;height:24px}
+.ai-ico.ai-claude img{width:34px;height:34px}
+@media (max-width:700px){.ai-links{grid-template-columns:repeat(2,1fr)}}
+.crash-log{max-height:22vh;min-height:110px}
+dialog.lc-dlg[data-kind="crash"] .crash-act{margin:10px 0 0}
+dialog.lc-dlg[data-kind="crash"] .ai-links{margin:0}
+dialog.lc-dlg[data-kind="crash"] .crash-ai-h{margin:14px 0 8px}
+dialog.lc-dlg[data-kind="crash"] .m-body{padding-bottom:16px}
+dialog.lc-dlg[data-kind="crash"] .m-body{gap:10px;max-height:calc(100vh - 190px)}
+dialog.lc-dlg[data-kind="crash"] .crash-log,dialog.lc-dlg[data-kind="crash"] .crash-act,dialog.lc-dlg[data-kind="crash"] .crash-ai-h{margin:0}
+
+/* ---------- настройки: карточки в колонках на всю ширину, без пустых мест ---------- */
+.settings-grid{display:block;max-width:none;columns:3 300px;column-gap:16px}
+.settings-grid>.setting-card{break-inside:avoid;-webkit-column-break-inside:avoid;margin:0 0 16px;display:block}
+.jv-list{display:grid;gap:6px;margin:0 0 12px}
+.jv-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13.5px}
+.jv-row b{font-family:"Space Grotesk",sans-serif}
+.jv-row span{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:12.5px}
+.jv-row em{margin-left:auto;font-style:normal;font-size:12px;color:var(--muted)}
+.jv-row em.ok{color:#4cc38a}.jv-row em.new{color:var(--accent)}
+.dc-opt{margin-top:10px}.dc-opt label{padding:8px 12px;border:1px solid var(--line-hard);border-radius:10px;background:var(--surface-2)}
+
+/* ---------- Discord: расширенные настройки ---------- */
+dialog.lc-dlg[data-kind="dcopts"]{width:min(820px,calc(100vw - 24px))}
+dialog.lc-dlg[data-kind="dcopts"] .m-body{gap:14px;max-height:calc(100vh - 190px)}
+.dc-prev{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.dc-card{display:grid;gap:2px;padding:10px 12px;border:1px solid var(--line-hard);border-radius:10px;background:#1e1f22;min-width:0}
+.dc-card small{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.dc-card b{font-size:13.5px;overflow-wrap:anywhere}
+.dc-card span{font-size:12.5px;color:#b5bac1;overflow-wrap:anywhere}
+.dc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px}
+.dc-row{display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border:1px solid var(--line-hard);border-radius:10px;background:var(--surface-2);cursor:pointer;transition:border-color .18s,background .18s}
+.dc-row:hover{border-color:color-mix(in srgb,var(--accent) 55%,var(--line-hard))}
+.dc-row:has(input:checked){border-color:color-mix(in srgb,var(--accent) 60%,var(--line-hard));background:color-mix(in srgb,var(--accent) 8%,var(--surface-2))}
+.dc-row input{margin-top:1px}
+.dc-row span{display:grid;gap:2px;min-width:0}
+.dc-row b{font-size:14px}
+.dc-row small{font-size:12.5px;color:var(--muted);line-height:1.35}

@@ -355,6 +355,65 @@ async function ensureJava(v, rep) {
   return exe;
 }
 
+/* ---------- обновление Java ---------- */
+function javaReleaseVersion(comp) {
+  try {
+    const t = fs.readFileSync(path.join(DIRS.runtime, comp, 'release'), 'utf8');
+    const m = /JAVA_VERSION="?([^"\r\n]+)"?/.exec(t);
+    return m ? m[1] : '';
+  } catch { return ''; }
+}
+function javaInstalledComps() {
+  try {
+    return fs.readdirSync(DIRS.runtime).filter(n => fs.existsSync(path.join(DIRS.runtime, n, '.ok')));
+  } catch { return []; }
+}
+/* Что установлено и что доступно у Mojang: [{ comp, major, installed, latest, upToDate }] */
+async function javaStatus() {
+  const comps = javaInstalledComps();
+  let all = null, offline = false;
+  try { all = await fetchJson(URLS.javaAll); } catch { offline = true; }
+  const list = comps.map(comp => {
+    const arr = all && all[javaKey()] && all[javaKey()][comp];
+    const latest = arr && arr[0] && arr[0].version ? String(arr[0].version.name || '') : '';
+    const installed = javaReleaseVersion(comp);
+    const major = (installed.match(/^(?:1\.)?(\d+)/) || [])[1] || '';
+    return { comp, major, installed, latest, upToDate: !!installed && !!latest && installed === latest };
+  });
+  return { list, offline, running: running.size > 0 };
+}
+/* Проверить и докачать все установленные Java по актуальному списку Mojang (изменившиеся и повреждённые файлы заменяются) */
+async function javaUpdate(report) {
+  if (running.size) throw new Error('Сначала закройте игру: файлы Java сейчас используются');
+  const comps = javaInstalledComps();
+  if (!comps.length) throw new Error('Java ещё не скачана: она установится при первом запуске игры');
+  report('Java: получаю список обновлений', 0);
+  const all = await fetchJson(URLS.javaAll);
+  const out = [];
+  for (let ci = 0; ci < comps.length; ci++) {
+    const comp = comps[ci];
+    const arr = all[javaKey()] && all[javaKey()][comp];
+    if (!arr || !arr.length) continue;
+    const before = javaReleaseVersion(comp);
+    const manifest = await fetchJson(arr[0].manifest.url);
+    const files = Object.entries(manifest.files).filter(([, f]) => f.type === 'file');
+    const ok = path.join(DIRS.runtime, comp, '.ok');
+    await fsp.rm(ok, { force: true });          // пока идёт обновление, Java считается неполной
+    let done = 0, changed = 0;
+    await pool(files, 12, async ([name, f]) => {
+      const dest = path.join(DIRS.runtime, comp, name);
+      const r = await download(f.downloads.raw.url, dest, { sha1: f.downloads.raw.sha1 });
+      if (r === 'downloaded') changed++;
+      if (f.executable && OS !== 'windows') await fsp.chmod(dest, 0o755);
+      done++;
+      if (done % 20 === 0 || done === files.length) report(`Java ${comp}: ${done}/${files.length}`, (ci + done / files.length) / comps.length);
+    });
+    await fsp.writeFile(ok, new Date().toISOString());
+    out.push({ comp, before, after: javaReleaseVersion(comp) || arr[0].version.name, changed });
+  }
+  return out;
+}
+
 /* ---------- установка всех файлов игры ---------- */
 async function ensureGame(versionId, report, { verify = true } = {}) {
   const v = await readVersion(versionId);
@@ -818,7 +877,7 @@ function buildCommand({ v, libs, jar, javaExe, inst, account, gameDir, nativesDi
   return { cmd: javaExe, args: [...mem, ...jvm, v.mainClass, ...game] };
 }
 
-async function launch(inst, account, report, onLog, onExit, onReady, onMinimize) {
+async function launch(inst, account, report, onLog, onExit, onReady, onMinimize, onWatch) {
   if (running.has(inst.id)) throw new Error('Эта установка уже запущена');
   const g = await ensureGame(inst.versionId, report, { verify: false });
   const gameDir = instDir(inst.id);
@@ -861,12 +920,18 @@ async function launch(inst, account, report, onLog, onExit, onReady, onMinimize)
   let minPs = null;   // слежение за сворачиванием окна игры (только Windows)
   const stopMin = () => { if (minPs) { try { minPs.kill(); } catch { /* уже завершился */ } minPs = null; } };
   const stopWatch = () => { clearTimeout(fallback); if (ps) { try { ps.kill(); } catch { /* уже завершился */ } ps = null; } };
+  /* Наблюдатель за окном игры (Windows): заголовок окна («Singleplayer» / «Multiplayer»),
+     свёрнутость и бездействие пользователя (нет ввода 2 минуты = АФК). Пишет в stdout строки M:, T:, A: */
   const startMinWatch = () => {
-    if (OS !== 'windows' || !onMinimize || !child.pid || minPs) return;
+    if (OS !== 'windows' || !(onMinimize || onWatch) || !child.pid || minPs) return;
     const script = `$ErrorActionPreference='SilentlyContinue'
-Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class MMW{[DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);}'
-$last=''
-while($true){$p=Get-Process -Id ${child.pid | 0};if(-not $p){break};$h=$p.MainWindowHandle;if($h -ne 0){if([MMW]::IsIconic($h)){$s='MIN'}else{$s='NORM'};if($s -ne $last){$last=$s;[Console]::Out.WriteLine($s);[Console]::Out.Flush()}};Start-Sleep -Milliseconds 350}`;
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class MMW{[DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);[StructLayout(LayoutKind.Sequential)]public struct LII{public uint cb;public uint t;}[DllImport("user32.dll")]public static extern bool GetLastInputInfo(ref LII p);public static uint Idle(){LII l=new LII();l.cb=(uint)Marshal.SizeOf(l);GetLastInputInfo(ref l);return ((uint)Environment.TickCount-l.t)/1000;}}'
+$lm='';$lt='';$la=''
+while($true){$p=Get-Process -Id ${child.pid | 0};if(-not $p){break};$h=$p.MainWindowHandle
+if($h -ne 0){if([MMW]::IsIconic($h)){$s='MIN'}else{$s='NORM'};if($s -ne $lm){$lm=$s;[Console]::Out.WriteLine('M:'+$s)}
+$t=[string]$p.MainWindowTitle;if($t -ne $lt){$lt=$t;[Console]::Out.WriteLine('T:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t)))}}
+if([MMW]::Idle() -ge 120){$a='1'}else{$a='0'};if($a -ne $la){$la=$a;[Console]::Out.WriteLine('A:'+$a)}
+[Console]::Out.Flush();Start-Sleep -Milliseconds 700}`;
     try {
       minPs = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true });
       let buf = '';
@@ -874,7 +939,11 @@ while($true){$p=Get-Process -Id ${child.pid | 0};if(-not $p){break};$h=$p.MainWi
         buf += String(d); let i;
         while ((i = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-          if (line === 'MIN' || line === 'NORM') { try { onMinimize(line === 'MIN'); } catch { /* не критично */ } }
+          try {
+            if (line.startsWith('M:')) { if (onMinimize) onMinimize(line === 'M:MIN'); }
+            else if (line.startsWith('T:')) { if (onWatch) onWatch({ title: Buffer.from(line.slice(2), 'base64').toString('utf8') }); }
+            else if (line.startsWith('A:')) { if (onWatch) onWatch({ afk: line === 'A:1' }); }
+          } catch { /* не критично */ }
         }
       });
       minPs.on('error', () => { minPs = null; });
@@ -1610,22 +1679,20 @@ async function cfCategories(kind) {
   return (j.data || []).filter(c => !c.isClass).map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+const cfVersionRow = f => ({
+  name: f.displayName || f.fileName, date: f.fileDate, game: (f.gameVersions || []).join(', '),
+  gameList: (f.gameVersions || []).filter(v => /^\d/.test(v)), loaderList: (f.gameVersions || []).map(v => v.toLowerCase()).filter(v => CF_LOADER[v]),
+  file: f.downloadUrl || null
+});
+/* Быстрая часть: сведения о моде и первые 50 файлов. Остальные страницы файлов отдаёт cfFiles (грузятся в фоне) */
 async function cfDetails(id) {
   const enc = encodeURIComponent(id);
   const [mod, first] = await Promise.all([
     cfRequest(`/mods/${enc}`),
     cfRequest(`/mods/${enc}/files`, { params: { pageSize: 50, index: 0 } })
   ]);
-  // файлов может быть сотни (старые версии игры тоже), поэтому забираем все страницы, а не только свежие
-  let fileList = first.data || [];
-  const totalFiles = Math.min((first.pagination && first.pagination.totalCount) || fileList.length, 1000);
-  const rest = [];
-  for (let i = 50; i < totalFiles; i += 50) rest.push(i);
-  if (rest.length) {
-    const pages = await Promise.all(rest.map(i => cfRequest(`/mods/${enc}/files`, { params: { pageSize: 50, index: i } }).catch(() => ({ data: [] }))));
-    for (const pg of pages) fileList = fileList.concat(pg.data || []);
-  }
-  const files = { data: fileList };
+  const list = first.data || [];
+  const total = Math.min((first.pagination && first.pagination.totalCount) || list.length, 1000);
   const m = mod.data;
   return {
     license: '-', followers: m.thumbsUpCount || 0, downloads: m.downloadCount || 0,
@@ -1634,12 +1701,18 @@ async function cfDetails(id) {
     links: { source: m.links && m.links.sourceUrl, issues: m.links && m.links.issuesUrl, wiki: m.links && m.links.wikiUrl },
     gallery: (m.screenshots || []).map(x => ({ url: x.url, title: x.title || '', desc: x.description || '' })),
     distributable: m.allowModDistribution !== false,
-    versions: (files.data || []).map(f => ({
-      name: f.displayName || f.fileName, date: f.fileDate, game: (f.gameVersions || []).join(', '),
-      gameList: (f.gameVersions || []).filter(v => /^\d/.test(v)), loaderList: (f.gameVersions || []).map(v => v.toLowerCase()).filter(v => CF_LOADER[v]),
-      file: f.downloadUrl || null
-    }))
+    moreFiles: total > 50, totalFiles: total,
+    versions: list.map(cfVersionRow)
   };
+}
+/* Файлы начиная с 51-го (старые версии игры), страницы грузятся параллельно */
+async function cfFiles(id, totalFiles) {
+  const enc = encodeURIComponent(id);
+  const total = Math.min(Number(totalFiles) || 0, 1000);
+  const idx = [];
+  for (let i = 50; i < total; i += 50) idx.push(i);
+  const pages = await Promise.all(idx.map(i => cfRequest(`/mods/${enc}/files`, { params: { pageSize: 50, index: i } }).catch(() => ({ data: [] }))));
+  return pages.flatMap(pg => (pg.data || []).map(cfVersionRow));
 }
 
 const CF_HOST = h => h === 'forgecdn.net' || h.endsWith('.forgecdn.net') || h === 'curseforge.com' || h.endsWith('.curseforge.com');
@@ -1820,7 +1893,7 @@ module.exports = {
   init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,
   loaderOptions, changeLoader, sysInfo, recommendRam, effectiveRam, maxRam, watchInstances, ensureAuthlib,
-  launch, isRunning, installMod, listMods, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, cfSearch, cfCategories, cfDetails, cfPackVersions, installCfMod, installCfPack, installPackAny,
+  launch, isRunning, installMod, listMods, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,
   // для тестов
   _t: { uniqueInstanceId, readCfPack, cfCard, cfFileUrl, cfPickFile, readMrpack, packDest, download, compareVer, forgeFor, neoforgeFor, fabricLikeFor, clampRam, countMods, lineFeeder, decodeBytes, ruleOk, mavenPath, resolveLibs, readVersion, buildCommand, expandArgs, sub, loadersFor, slugify, installFabricLike, resolveForgeLike }
 };

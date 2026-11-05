@@ -68,13 +68,20 @@ const Modrinth = {
   },
 
   async details(mod, signal){
-    const [pr, vr] = await Promise.all([
-      fetch(`${this.api}/project/${mod.slug}`, {signal}),
-      fetch(`${this.api}/project/${mod.slug}/version`, {signal})
-    ]);
+    // версии идут отдельным запросом и без changelog (у популярных модов это мегабайты текста);
+    // окно открывается, как только пришёл сам проект
+    const vp = fetch(`${this.api}/project/${mod.slug}/version?include_changelog=false`, {signal})
+      .then(r=> r.ok ? r.json() : [])
+      .then(list=> list.map(v=>({
+        name:v.version_number, date:v.date_published,
+        game:(v.game_versions||[]).join(", "),
+        gameList:v.game_versions||[], loaderList:v.loaders||[],
+        file:(v.files||[]).find(f=>f.primary)?.url || (v.files||[])[0]?.url
+      })));
+    vp.catch(()=>{});
+    const pr = await fetch(`${this.api}/project/${mod.slug}`, {signal});
     if(!pr.ok) throw new Error(`Modrinth ответил ${pr.status}`);
     const p = await pr.json();
-    const versions = vr.ok ? await vr.json() : [];
     return {
       license:p.license && (p.license.name||p.license.id),
       gallery:(p.gallery||[]).slice()
@@ -83,13 +90,7 @@ const Modrinth = {
       followers:p.followers, downloads:p.downloads,
       gameVersions:p.game_versions||[], loaders:p.loaders||[],
       links:{source:p.source_url, issues:p.issues_url, wiki:p.wiki_url},
-      // показываем вообще все опубликованные версии, а не только первые несколько
-      versions: versions.map(v=>({
-        name:v.version_number, date:v.date_published,
-        game:(v.game_versions||[]).join(", "),
-        gameList:v.game_versions||[], loaderList:v.loaders||[],
-        file:(v.files||[]).find(f=>f.primary)?.url || (v.files||[])[0]?.url
-      }))
+      versions:[], versionsPromise: vp
     };
   },
 
@@ -261,7 +262,13 @@ const CurseForge = {
     }
     return mmCall("cf:search", {query, category, loader, gameVersion, sort, offset, limit, kind});
   },
-  async details(mod){ return mmCall("cf:details", mod.cfId || String(mod.id).split(":")[1]); },
+  async details(mod){
+    const id = mod.cfId || String(mod.id).split(":")[1];
+    const d = await mmCall("cf:details", id);
+    // первые 50 файлов уже есть, остальные страницы догружаются в фоне
+    if(d.moreFiles) d.versionsPromise = mmCall("cf:files", {id, total:d.totalFiles}).then(rest=> d.versions.concat(rest)).catch(()=>d.versions);
+    return d;
+  },
   async gameVersions(){ return Modrinth.gameVersions(); }
 };
 
@@ -723,6 +730,7 @@ function filterVersionRows(rows, f){
 const modal = $("modal");
 let current = null;
 let modalDetails = null, modalShowAll = false;
+const detailsCache = new Map();
 
 /* ---------- галерея изображений мода/плагина и просмотр во весь экран ---------- */
 let lightbox = null, lbImages = [], lbIndex = 0;
@@ -839,7 +847,17 @@ async function openModal(m){
     return;
   }
   try{
-    const d = await SOURCES[m.source].details(m);
+    let d = detailsCache.get(m.id);
+    if(!d){
+      d = await SOURCES[m.source].details(m);
+      if(d.versionsPromise){
+        const dd = d;
+        dd.versionsPromise = dd.versionsPromise.then(v=>{ dd.versions = v; dd.versionsReady = true; return v; });
+        dd.versionsPromise.catch(()=>{ dd.versionsReady = true; });
+      } else d.versionsReady = true;
+      detailsCache.set(m.id, d);
+      if(detailsCache.size > 40) detailsCache.delete(detailsCache.keys().next().value);
+    }
     if(current !== m) return;
     const otherLinks = (m.variants||[]).filter(v=>v.url && v.url!==m.url)
       .map(v=>`<a href="${v.url}" target="_blank" rel="noopener">${SOURCE_META[v.source]?.label||v.source} ↗</a>`).join("");
@@ -864,7 +882,13 @@ async function openModal(m){
       </div>
       ${noDirectDownload ? `<p class="filter-note">Этот источник не даёт прямую ссылку на файл. Скачайте мод через кнопку «Открыть страницу мода» выше.</p>` : ""}`;
     if(m.desc) maybeTranslate($("mDesc"), m.desc);
-    modalDetails = d; renderModalVersions(); if(m.kind !== "plugin") renderModalGallery(d.gallery);
+    modalDetails = d;
+    if(d.versionsReady) renderModalVersions();
+    else {
+      const vb = $("mVersions"); if(vb) vb.innerHTML = `<p style="color:var(--muted)">Загружаю список версий…</p>`;
+      d.versionsPromise.then(()=>{ if(current === m && modalDetails === d) renderModalVersions(); }).catch(()=>{});
+    }
+    if(m.kind !== "plugin") renderModalGallery(d.gallery);
     window.LauncherUI?.decorateModal?.(m);
   }catch(err){
     $("mBody").innerHTML = `<div class="badges">${badgesHTML(m)}</div><p id="mDesc">${m.desc || ""}</p>
@@ -1503,16 +1527,17 @@ function renderSettingsPage(){
       </div>
       ${window.mm ? `<div class="setting-card" id="stDiscord">
         <h3>Статус в Discord</h3>
-        <p>В вашем профиле Discord будет видно, что вы делаете в лаунчере: выбираете моды, устанавливаете сборку или играете.</p>
+        <p>В профиле Discord видно, что вы делаете в лаунчере. В игре показываются режим (меню, одиночная игра, сервер), мир, биом и АФК.</p>
         <button type="button" class="dc-toggle" id="dcOn" role="switch" aria-checked="true" aria-describedby="dcStat">
           <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.3 5.4A17 17 0 0 0 15 4.1l-.2.4a15.6 15.6 0 0 1 3.9 1.9 14.7 14.7 0 0 0-13.4 0 15.6 15.6 0 0 1 3.9-1.9l-.2-.4a17 17 0 0 0-4.3 1.3C2.1 9.5 1.4 13.4 1.7 17.2a17.2 17.2 0 0 0 5.3 2.7l1.1-1.8a11 11 0 0 1-1.7-.8l.4-.3a12.3 12.3 0 0 0 10.4 0l.4.3c-.5.3-1.1.6-1.7.8l1.1 1.8a17.2 17.2 0 0 0 5.3-2.7c.4-4.4-.7-8.3-3-11.8zM8.7 14.9c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2zm6.6 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2z"/></svg></span>
           <span class="dc-txt"><b>Показывать статус в Discord</b><small id="dcStat">Загружаю…</small></span>
           <span class="dc-track" aria-hidden="true"><i></i></span>
         </button>
+        <div class="upd-actions"><button type="button" class="btn" id="dcAdv">Расширенные настройки</button></div>
       </div>` : ""}
       ${window.mm ? `<div class="setting-card" id="stHide">
         <h3>Сворачивание лаунчера</h3>
-        <p>После успешного запуска игры лаунчер прячется и пропадает с панели задач. Когда вы сворачиваете окно Minecraft или закрываете игру, он появляется снова.</p>
+        <p>После успешного запуска игры лаунчер прячется и пропадает с панели задач. Он остаётся скрытым, пока игра не будет закрыта полностью, и появляется снова после её закрытия.</p>
         <button type="button" class="dc-toggle" id="hideOn" role="switch" aria-checked="false" aria-describedby="hideStat">
           <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
           <span class="dc-txt"><b>Сворачивать лаунчер при запуске игры</b><small id="hideStat">Загружаю…</small></span>
@@ -1527,6 +1552,15 @@ function renderSettingsPage(){
         <div class="upd-actions">
           <button type="button" class="btn primary" id="upBtn" disabled>Проверить обновления</button>
           <a class="btn" id="upLink" target="_blank" rel="noopener" hidden>Страница релиза ↗</a>
+        </div>
+      </div>` : ""}
+      ${window.mm ? `<div class="setting-card" id="stJava">
+        <h3>Java</h3>
+        <p id="jvStat" role="status">Загружаю…</p>
+        <div class="jv-list" id="jvList"></div>
+        <progress id="jvBar" max="100" value="0" hidden style="width:100%"></progress>
+        <div class="upd-actions">
+          <button type="button" class="btn primary" id="jvBtn" disabled>Обновить Java</button>
         </div>
       </div>` : ""}
       <div class="setting-card">
@@ -1575,6 +1609,7 @@ function renderSettingsPage(){
     };
     const load = ()=> mm.invoke("settings:get").then(r=>{ if(r.ok) paint(r.data); });
     load();
+    $("dcAdv").addEventListener("click", openDiscordOptions);
     // ID приложения встроен в лаунчер, пользователю остаётся только включить или выключить статус
     btn.addEventListener("click", async ()=>{
       const want = btn.getAttribute("aria-checked") !== "true";
@@ -1604,6 +1639,43 @@ function renderSettingsPage(){
       btn.disabled = false;
       if(!r.ok){ toast(r.error); return; }
       paint(r.data); toast(want ? "Лаунчер будет сворачиваться при запуске игры" : "Сворачивание лаунчера выключено");
+    });
+  }
+
+  if(window.mm && $("stJava")){
+    if(window.__jvOff) window.__jvOff();
+    const J = {busy:false};
+    const esc = t=> String(t).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const load = async ()=>{
+      const r = await mm.invoke("java:status");
+      if(!$("stJava")) return;
+      if(!r.ok){ $("jvStat").textContent = r.error; $("jvBtn").disabled = false; return; }
+      const {list, offline, running} = r.data;
+      const old = list.filter(x=> x.latest && !x.upToDate).length;
+      $("jvStat").textContent = !list.length ? "Java ещё не скачана: она установится при первом запуске игры."
+        : offline ? "Не удалось связаться с серверами Mojang, показаны установленные версии."
+        : old ? `Доступны обновления: ${old}.` : "Установлены последние версии Java.";
+      $("jvList").innerHTML = list.map(x=>`<div class="jv-row"><b>Java ${esc(x.major || "?")}</b><span>${esc(x.installed || "версия неизвестна")}${x.latest && !x.upToDate ? ` → ${esc(x.latest)}` : ""}</span><em class="${x.upToDate ? "ok" : x.latest ? "new" : ""}">${x.upToDate ? "актуальна" : x.latest ? "есть обновление" : ""}</em></div>`).join("");
+      $("jvBtn").disabled = J.busy || !list.length || running;
+      $("jvBtn").title = running ? "Закройте игру, чтобы обновить Java" : "";
+    };
+    load();
+    window.__jvOff = mm.on("progress", p=>{
+      if(!$("stJava")){ window.__jvOff(); return; }
+      if(p.key !== "java") return;
+      $("jvBar").hidden = false; if(p.pct != null) $("jvBar").value = Math.round(p.pct*100);
+      if(p.text) $("jvStat").textContent = p.text;
+    });
+    $("jvBtn").addEventListener("click", async ()=>{
+      J.busy = true; $("jvBtn").disabled = true; $("jvBtn").textContent = "Обновляю…"; $("jvBar").hidden = false; $("jvBar").value = 0;
+      const r = await mm.invoke("java:update");
+      J.busy = false; $("jvBtn").textContent = "Обновить Java"; $("jvBar").hidden = true;
+      if(!$("stJava")) return;
+      if(!r.ok){ toast(r.error, 5000); } else {
+        const changed = r.data.reduce((n,x)=> n + x.changed, 0);
+        toast(changed ? `Java обновлена (файлов заменено: ${changed})` : "Java уже актуальна", 4000);
+      }
+      load();
     });
   }
 
@@ -1651,6 +1723,63 @@ function renderSettingsPage(){
     });
   }
 
+}
+
+/* ---------- Discord: расширенные настройки статуса ---------- */
+const DC_OPTS = [
+  {g:"В игре", items:[
+    {k:"showHost",   t:"Адрес сервера",        d:"Показывать IP или домен сервера, на котором вы играете"},
+    {k:"showWorld",  t:"Название мира",        d:"Название одиночного мира"},
+    {k:"showBiome",  t:"Биом",                 d:"В каком биоме находится игрок"},
+    {k:"showPlace",  t:"Где находится",        d:"Пещеры, глубины, Нижний мир, Край, горы, океан"},
+    {k:"showAction", t:"Чем занят",            d:"По предмету в руке: добывает, рубит, сражается, рыбачит; полёт на элитрах, верховая езда"},
+    {k:"showWeather",t:"Погода и время суток", d:"День или ночь, дождь, гроза"},
+    {k:"showHealth", t:"Здоровье",             d:"«Борется за жизнь», когда осталось мало здоровья"},
+    {k:"showEvents", t:"События",              d:"«Только что погиб» и «получил достижение» на пару минут"},
+    {k:"showAfk",    t:"АФК",                  d:"«Стоит АФК», если 2 минуты нет нажатий клавиш и мыши"},
+    {k:"showCoords", t:"Координаты",           d:"Добавить X Y Z к статусу (по умолчанию выключено)"}
+  ]},
+  {g:"Общее", items:[
+    {k:"showInstance", t:"Экземпляр",              d:"Название экземпляра и загрузчик в подсказке к иконке"},
+    {k:"showTimer",    t:"Таймер",                 d:"Сколько времени вы играете"},
+    {k:"showLauncher", t:"Действия в лаунчере",    d:"Что вы делаете вне игры: каталоги, настройки, установка"}
+  ]}
+];
+async function openDiscordOptions(){
+  let d = $("dcDlg");
+  if(!d){
+    d = document.createElement("dialog");
+    d.id = "dcDlg"; d.className = "acc-dlg lc-dlg"; d.dataset.kind = "dcopts";
+    document.body.appendChild(d);
+    d.addEventListener("click", e=>{ if(e.target.closest("[data-close]")) d.close(); });
+  }
+  const r = await mm.invoke("settings:get");
+  const st = r.ok ? r.data : {};
+  const saved = st.discordOpts || {};
+  const val = k=> typeof saved[k] === "boolean" ? saved[k] : (k === "showHost" ? !st.discordHideServer : k !== "showCoords");
+  const esc = t=> String(t).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  d.innerHTML = `
+    <div class="m-head"><div><h2>Статус в Discord</h2><div class="by">Расширенные настройки</div></div></div>
+    <div class="m-body">
+      <div class="dc-prev" id="dcPrev" aria-live="polite"></div>
+      ${DC_OPTS.map(g=>`<div><h4 class="sk-h">${g.g}</h4><div class="dc-grid">${g.items.map(i=>`
+        <label class="dc-row"><input type="checkbox" data-k="${i.k}" ${val(i.k) ? "checked" : ""}><span><b>${esc(i.t)}</b><small>${esc(i.d)}</small></span></label>`).join("")}</div></div>`).join("")}
+      <p class="filter-note">Мир, биом и занятие берутся из файлов сохранения одиночной игры, поэтому могут отставать на несколько минут (игра пишет их при автосохранении). На серверах доступны адрес, АФК и события.</p>
+    </div>
+    <div class="m-foot"><button class="btn" data-close type="button">Закрыть</button></div>`;
+  const prev = async ()=>{
+    const p = await mm.invoke("discord:preview");
+    if(!p.ok || !$("dcPrev")) return;
+    const card = (title, x)=>`<div class="dc-card"><small>${title}</small><b>${esc(x.details || "")}</b><span>${esc(x.state || "")}</span></div>`;
+    $("dcPrev").innerHTML = card("Одиночная игра", p.data.single) + card("Стоит АФК", p.data.afk) + card("Событие", p.data.event) + card("Сервер", p.data.server);
+  };
+  d.querySelectorAll("input[data-k]").forEach(c=> c.addEventListener("change", async ()=>{
+    const r2 = await mm.invoke("settings:set", { discordOpts: { [c.dataset.k]: c.checked } });
+    if(!r2.ok){ toast(r2.error); c.checked = !c.checked; return; }
+    prev();
+  }));
+  prev();
+  if(!d.open) d.showModal();
 }
 
 /* ============================================================
