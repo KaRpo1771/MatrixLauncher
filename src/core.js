@@ -356,8 +356,17 @@ async function ensureJava(v, rep) {
     done++;
     if (done % 20 === 0 || done === files.length) rep(done / files.length, `Java ${comp}: ${done}/${files.length}`);
   });
-  await fsp.writeFile(ok, new Date().toISOString());
+  await fsp.writeFile(ok, javaMarker(arr[0].version && arr[0].version.name));
   return exe;
+}
+
+/* Метка «Java скачана полностью» (.ok) хранит имя сборки Mojang (например 8u51-cacert462b08).
+   Сравнивать нужно именно его: версия в файле release внутри Java (1.8.0_51) записывается в другом виде
+   и никогда не совпадёт с именем сборки в списке Mojang. */
+function javaMarker(name) { return JSON.stringify({ name: String(name || ''), date: new Date().toISOString() }); }
+function javaBuildName(comp) {
+  try { const m = JSON.parse(fs.readFileSync(path.join(DIRS.runtime, comp, '.ok'), 'utf8')); return m && m.name ? String(m.name) : ''; }
+  catch { return ''; }   // метка от старой версии лаунчера (там была только дата): сборка неизвестна
 }
 
 /* ---------- обновление Java ---------- */
@@ -382,8 +391,9 @@ async function javaStatus() {
     const arr = all && all[javaKey()] && all[javaKey()][comp];
     const latest = arr && arr[0] && arr[0].version ? String(arr[0].version.name || '') : '';
     const installed = javaReleaseVersion(comp);
+    const build = javaBuildName(comp);
     const major = (installed.match(/^(?:1\.)?(\d+)/) || [])[1] || '';
-    return { comp, major, installed, latest, upToDate: !!installed && !!latest && installed === latest };
+    return { comp, major, installed, build, latest, upToDate: !!build && !!latest && build === latest };
   });
   return { list, offline, running: running.size > 0 };
 }
@@ -413,7 +423,7 @@ async function javaUpdate(report) {
       done++;
       if (done % 20 === 0 || done === files.length) report(`Java ${comp}: ${done}/${files.length}`, (ci + done / files.length) / comps.length);
     });
-    await fsp.writeFile(ok, new Date().toISOString());
+    await fsp.writeFile(ok, javaMarker(arr[0].version && arr[0].version.name));
     out.push({ comp, before, after: javaReleaseVersion(comp) || arr[0].version.name, changed });
   }
   return out;

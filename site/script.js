@@ -1655,7 +1655,7 @@ function renderSettingsPage(){
       $("jvStat").textContent = !list.length ? "Java ещё не скачана: она установится при первом запуске игры."
         : offline ? "Не удалось связаться с серверами Mojang, показаны установленные версии."
         : old ? `Доступны обновления: ${old}.` : "Установлены последние версии Java.";
-      $("jvList").innerHTML = list.map(x=>`<div class="jv-row"><b>Java ${esc(x.major || "?")}</b><span>${esc(x.installed || "версия неизвестна")}${x.latest && !x.upToDate ? ` → ${esc(x.latest)}` : ""}</span><em class="${x.upToDate ? "ok" : x.latest ? "new" : ""}">${x.upToDate ? "актуальна" : x.latest ? "есть обновление" : ""}</em></div>`).join("");
+      $("jvList").innerHTML = list.map(x=>`<div class="jv-row"><b>Java ${esc(x.major || "?")}</b><span>${esc(x.installed || "версия неизвестна")}${x.latest && !x.upToDate ? ` → сборка ${esc(x.latest)}` : ""}</span><em class="${x.upToDate ? "ok" : x.latest ? "new" : ""}">${x.upToDate ? "актуальна" : x.latest ? "есть обновление" : ""}</em></div>`).join("");
       $("jvBtn").disabled = J.busy || !list.length || running;
       $("jvBtn").title = running ? "Закройте игру, чтобы обновить Java" : "";
     };
@@ -1673,7 +1673,7 @@ function renderSettingsPage(){
       if(!$("stJava")) return;
       if(!r.ok){ toast(r.error, 5000); } else {
         const changed = r.data.reduce((n,x)=> n + x.changed, 0);
-        toast(changed ? `Java обновлена (файлов заменено: ${changed})` : "Java уже актуальна", 4000);
+        toast(changed ? `Java обновлена (файлов заменено: ${changed})` : "Файлы Java проверены, все на месте и актуальны", 4000);
       }
       load();
     });
