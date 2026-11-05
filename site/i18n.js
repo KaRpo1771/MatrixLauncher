@@ -746,7 +746,6 @@
     "Не удалось обновить": "Update failed",
     "Устанавливаю обновление": "Installing update",
     "Отменить обновление": "Cancel update",
-    "Установка не удалась. Скачайте новую версию вручную (подробности в update.log)": "Installation failed. Download the new version manually (details in update.log)",
     "Лаунчер сейчас перезапустится": "The launcher will restart now",
     "Скачать": "Download"
   });

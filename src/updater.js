@@ -41,7 +41,7 @@ function isNewer(a, b) {   // a новее b?
 
 let hooks = { current: () => '0.0.0', emit: () => {}, canRestart: () => null, quit: () => {}, dataDir: '' };
 const st = { phase: 'idle', current: '', latest: '', notes: '', url: '', canInstall: false, pct: 0, error: '' };
-let asset = null, busy = false, abortCtl = null, failedFor = '';
+let asset = null, busy = false, abortCtl = null, failedFor = '', failedWhy = '';
 
 function set(patch) { Object.assign(st, patch); hooks.emit({ ...st }); }
 const view = () => ({ ...st });
@@ -76,7 +76,7 @@ async function check({ silent = false } = {}) {
     set({
       phase: 'available', latest, url: rel.html_url || '', notes: String(rel.body || '').slice(0, 2000),
       canInstall: process.platform === 'win32' && !portable && !!asset && !failed,
-      error: failed ? 'Установка не удалась. Скачайте новую версию вручную (подробности в update.log)' : ''
+      error: failed ? 'Установка не удалась, скачайте новую версию вручную.' + (failedWhy ? ' Журнал: ' + failedWhy : '') + ' (файл update.log)' : ''
     });
   } catch (e) {
     if (silent) set({ phase: 'idle', error: '' }); else set({ phase: 'error', error: e.message });
@@ -118,25 +118,40 @@ async function download(a, dest, signal) {
 const TMP_DIR = path.join(os.tmpdir(), 'matrixl-update');
 const PS_SCRIPT = `param([int]$OldPid,[string]$Installer,[string]$Exe,[string]$Log)
 function L($m){ try { Add-Content -LiteralPath $Log -Value ((Get-Date -Format 's') + ' ' + $m) -Encoding UTF8 } catch {} }
-L "helper started, old pid $OldPid"
+L ('helper started, PowerShell ' + $PSVersionTable.PSVersion + ', old pid ' + $OldPid)
 try { Wait-Process -Id $OldPid -Timeout 40 -ErrorAction Stop } catch {}
 try {
   $n = [IO.Path]::GetFileNameWithoutExtension($Exe)
   Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Exe } | Stop-Process -Force -ErrorAction SilentlyContinue
 } catch {}
 Start-Sleep -Seconds 2
+$asar = Join-Path (Split-Path -Parent $Exe) 'resources\app.asar'
+function Stamp { if (Test-Path -LiteralPath $asar) { (Get-Item -LiteralPath $asar).LastWriteTimeUtc.Ticks } else { 0 } }
+$before = Stamp
 $code = -1
-try { $p = Start-Process -FilePath $Installer -ArgumentList '/S','--updated' -PassThru -Wait; $code = $p.ExitCode } catch { L ('installer failed to start: ' + $_.Exception.Message) }
-L "installer exit code: $code"
-try {
-  $i = [IO.Path]::GetFileNameWithoutExtension($Installer)
-  Get-Process -Name $i -ErrorAction SilentlyContinue | Wait-Process -Timeout 180 -ErrorAction SilentlyContinue
-} catch {}
+try { $p = Start-Process -FilePath $Installer -ArgumentList '--updated','/S','--force-run' -PassThru -Wait; $code = $p.ExitCode } catch { L ('silent installer failed to start: ' + $_.Exception.Message) }
+L ('silent installer exit code: ' + $code)
+function WaitInstaller {
+  try {
+    $i = [IO.Path]::GetFileNameWithoutExtension($Installer)
+    Get-Process -Name $i -ErrorAction SilentlyContinue | Wait-Process -Timeout 180 -ErrorAction SilentlyContinue
+  } catch {}
+}
+WaitInstaller
 Start-Sleep -Seconds 2
+$after = Stamp
+$ok = ($code -eq 0) -and (($before -eq 0) -or ($before -ne $after))
+if ($ok) {
+  L 'update applied'
+} else {
+  L ('silent install did not apply (app.asar changed: ' + ($before -ne $after) + '), opening the installer window')
+  try { Start-Process -FilePath $Installer -Wait; L 'installer window closed' } catch { L ('installer window failed: ' + $_.Exception.Message) }
+  WaitInstaller
+}
 if (Test-Path -LiteralPath $Exe) {
   try { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe); L 'launcher started' } catch { L ('launcher start failed: ' + $_.Exception.Message) }
 } else { L ('launcher not found: ' + $Exe) }
-try { Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue } catch {}
+if ($ok) { try { Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue } catch {} }
 `;
 
 const pendingFile = () => hooks.dataDir ? path.join(hooks.dataDir, 'update-pending.json') : '';
@@ -147,14 +162,25 @@ const logFile = () => hooks.dataDir ? path.join(hooks.dataDir, 'update.log') : p
 function launchInstaller(dir, file, target) {
   const script = path.join(dir, 'update.ps1');
   const log = logFile();
+  const note = m => { try { fs.appendFileSync(log, `${new Date().toISOString()} ${m}\n`, 'utf8'); } catch { /* не критично */ } };
   fs.writeFileSync(script, '\uFEFF' + PS_SCRIPT, 'utf8');
   fs.writeFileSync(log, `${new Date().toISOString()} update ${hooks.current()} -> ${target}\n`, 'utf8');
   if (pendingFile()) fs.writeFileSync(pendingFile(), JSON.stringify({ from: hooks.current(), target }), 'utf8');
   const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script,
     '-OldPid', String(process.pid), '-Installer', file, '-Exe', process.execPath, '-Log', log];
-  const child = spawn('powershell.exe', args, { detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', e => { try { fs.appendFileSync(log, 'powershell: ' + e.message + '\n'); } catch { /* не критично */ } });
-  child.unref();
+  return new Promise(resolve => {
+    let done = false;
+    const fin = () => { if (!done) { done = true; resolve(); } };
+    const child = spawn('powershell.exe', args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('spawn', () => { child.unref(); note('powershell started, pid ' + child.pid); fin(); });
+    child.once('error', e => {
+      // PowerShell недоступен (например, запрещён политикой): запасной путь, обычное окно установщика
+      note('powershell failed: ' + e.message + '; opening the installer window');
+      try { const c = spawn(file, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' }); c.on('error', () => {}); c.unref(); } catch (e2) { note('installer failed: ' + e2.message); }
+      fin();
+    });
+    setTimeout(fin, 3000);
+  });
 }
 
 /* После запуска: если обновление было заказано, а версия не выросла, установка не удалась; если выросла, чистим следы */
@@ -165,7 +191,13 @@ function checkPending() {
   try { fs.rmSync(pf, { force: true }); } catch { /* не критично */ }
   if (!p) return;
   const cur = hooks.current();
-  if (isNewer(p.target, cur)) failedFor = String(p.target);   // версия не поменялась
+  if (isNewer(p.target, cur)) {   // версия не поменялась
+    failedFor = String(p.target);
+    try {
+      const lines = fs.readFileSync(logFile(), 'utf8').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      failedWhy = (lines[lines.length - 1] || '').replace(/^\d{4}-\d\d-\d\dT[\d:.Z-]+\s*/, '').slice(0, 160);
+    } catch { failedWhy = ''; }
+  }
   else { try { fs.rmSync(logFile(), { force: true }); } catch { /* не критично */ } }
   try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch { /* не критично */ }
 }
@@ -187,7 +219,7 @@ async function install() {
     await download(asset, file, abortCtl.signal);
     if (abortCtl.signal.aborted) { const e = new Error('Загрузка отменена'); e.cancelled = true; throw e; }
     set({ phase: 'installing', pct: 100 });
-    launchInstaller(dir, file, st.latest);
+    await launchInstaller(dir, file, st.latest);
     setTimeout(() => hooks.quit(), 800);
   } catch (e) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* не критично */ }
