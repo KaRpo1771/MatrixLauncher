@@ -403,6 +403,7 @@ app.whenReady().then(() => {
 
   updater.init({
     current: () => app.getVersion(),
+    dataDir: userData,
     emit: st => send('update-state', st),
     canRestart: () => presence.playing.size ? 'Сначала закройте игру, потом обновляйте лаунчер'
       : (busy.size || presence.tasks.size) ? 'Дождитесь окончания скачивания, потом обновляйте лаунчер' : null,

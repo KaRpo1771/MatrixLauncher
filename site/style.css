@@ -1374,7 +1374,6 @@ input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
 .spec .ld-chip{display:inline-flex;align-items:center;gap:8px;font-size:14.5px;line-height:1.2;color:var(--text);padding:3px 10px 3px 7px;border:1px solid var(--line-hard);border-radius:999px;background:var(--surface-2)}
 .spec .ld-chip .ld-ico{width:18px;height:18px;margin:0;flex:none}
 .ld-ico{margin-right:0}
-.upd-cancel{background:transparent}
 
 /* ---------- сворачивание лаунчера ---------- */
 #stHide .dc-ico{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:var(--accent-ink)}
@@ -1444,3 +1443,44 @@ dialog.lc-dlg[data-kind="dcopts"] .m-body{gap:14px;max-height:calc(100vh - 190px
 .dc-row span{display:grid;gap:2px;min-width:0}
 .dc-row b{font-size:14px}
 .dc-row small{font-size:12.5px;color:var(--muted);line-height:1.35}
+
+/* ============================================================
+   Красный крестик отмены обновления
+   ============================================================ */
+.upd-x{flex:none;display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid color-mix(in srgb,var(--redstone) 55%,transparent);border-radius:50%;
+  background:color-mix(in srgb,var(--redstone) 14%,transparent);color:var(--redstone);cursor:pointer;transition:background .15s,color .15s,transform .15s,border-color .15s}
+.upd-x svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round}
+.upd-x:hover{background:var(--redstone);border-color:var(--redstone);color:#fff;transform:scale(1.08)}
+.upd-x:active{transform:scale(.94)}
+.upd-x:focus-visible{outline:2px solid var(--redstone);outline-offset:2px}
+.upd-x:disabled{opacity:.5;cursor:default;transform:none}
+.upd-x[hidden]{display:none!important}
+
+/* ============================================================
+   Своя полоска загрузки (вместо системной <progress>): скруглённая дорожка,
+   заливка цветом темы с мягким бликом, плавное изменение ширины
+   ============================================================ */
+progress{
+  -webkit-appearance:none;appearance:none;display:block;border:0;overflow:hidden;
+  height:10px;border-radius:999px;background:transparent;vertical-align:middle;
+  accent-color:var(--accent);
+}
+progress::-webkit-progress-bar{
+  background:color-mix(in srgb,var(--text) 9%,var(--bg-0,#000));
+  border-radius:999px;box-shadow:inset 0 1px 2px rgba(0,0,0,.55),0 0 0 1px color-mix(in srgb,var(--text) 10%,transparent);
+}
+progress::-webkit-progress-value{
+  border-radius:999px;transition:width .3s ease;
+  background:
+    linear-gradient(100deg,transparent 0 35%,rgba(255,255,255,.34) 50%,transparent 65% 100%) 0 0/220% 100% no-repeat,
+    linear-gradient(90deg,var(--accent-2),var(--accent));
+  box-shadow:0 0 10px -1px color-mix(in srgb,var(--accent) 65%,transparent);
+  animation:pg-shine 1.8s linear infinite;
+}
+progress:indeterminate::-webkit-progress-value{width:100%!important;background:
+  repeating-linear-gradient(115deg,var(--accent) 0 12px,color-mix(in srgb,var(--accent) 55%,transparent) 12px 24px) 0 0/48px 100%;animation:pg-slide .9s linear infinite}
+progress[value="100"]::-webkit-progress-value{animation:none}
+@keyframes pg-shine{from{background-position:140% 0,0 0}to{background-position:-80% 0,0 0}}
+@keyframes pg-slide{to{background-position:48px 0}}
+@media (prefers-reduced-motion:reduce){progress::-webkit-progress-value{animation:none;transition:none}}
+.upd-banner progress{width:110px}

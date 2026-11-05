@@ -54,11 +54,16 @@ let ROOT = null;
 const DIRS = {};
 function init(root) {
   ROOT = root;
-  for (const d of ['versions', 'libraries', 'assets', 'runtime', 'instances', 'installers']) {
+  for (const d of ['versions', 'libraries', 'assets', 'runtime', 'instances']) {
     DIRS[d] = path.join(root, d);
     fs.mkdirSync(DIRS[d], { recursive: true });
   }
   DIRS.root = root;
+  // временные папки (установщики загрузчиков, скачанные сборки) создаются только на время работы;
+  // всё, что осталось от прерванной или старой установки, убираем
+  DIRS.installers = path.join(root, 'installers');
+  DIRS.packs = path.join(root, 'packs');
+  for (const d of [DIRS.installers, DIRS.packs]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* занято, уберём в следующий раз */ } }
 }
 
 /* ---------- вывод процессов: UTF-8, а если не получается, кодовая страница Windows ---------- */
@@ -599,26 +604,35 @@ async function installForgeLike(mc, loader, rep, onLog, wanted, exact) {
   const vanilla = await readVersion(mc);
   const javaExe = await ensureJava(vanilla, stage(rep, 0, 0.5));
   const installer = path.join(DIRS.installers, path.basename(info.installer));
-  rep('Скачиваю установщик загрузчика', 0.5);
-  await download(info.installer, installer, {});
   const profiles = path.join(DIRS.root, 'launcher_profiles.json');
-  if (!fs.existsSync(profiles)) await fsp.writeFile(profiles, JSON.stringify({ profiles: {}, version: 3 }));
-  // установщику нужен клиентский jar ванильной версии
-  await download(vanilla.downloads.client.url, path.join(DIRS.versions, mc, mc + '.jar'), { sha1: vanilla.downloads.client.sha1 });
-
+  const hadProfiles = fs.existsSync(profiles);
   const before = new Set(listVersionDirs());
-  rep('Запускаю установщик (это может занять несколько минут)…', 0.55);
-  await new Promise((resolve, reject) => {
-    const p = spawn(javaExe, ['-jar', installer, '--installClient', DIRS.root], { cwd: DIRS.root, windowsHide: true });
-    const job = jobs.getStore();
-    if (job) { job.procs.add(p); if (job.cancelled) p.kill(); }
-    let tail = '';
-    const f1 = lineFeeder(l => { tail = (tail + l + '\n').slice(-4000); if (onLog) onLog(l); });
-    const f2 = lineFeeder(l => { tail = (tail + l + '\n').slice(-4000); if (onLog) onLog(l); });
-    p.stdout.on('data', f1.push); p.stderr.on('data', f2.push);
-    p.on('error', reject);
-    p.on('close', code => { f1.flush(); f2.flush(); if (job) job.procs.delete(p); if (job && job.cancelled) return reject(new Error(CANCELLED)); code === 0 ? resolve() : reject(new Error(`Установщик завершился с кодом ${code}\n${tail.slice(-600)}`)); });
-  });
+  try {
+    rep('Скачиваю установщик загрузчика', 0.5);
+    await download(info.installer, installer, {});
+    // установщику нужен launcher_profiles.json и клиентский jar ванильной версии
+    if (!hadProfiles) await fsp.writeFile(profiles, JSON.stringify({ profiles: {}, version: 3 }));
+    await download(vanilla.downloads.client.url, path.join(DIRS.versions, mc, mc + '.jar'), { sha1: vanilla.downloads.client.sha1 });
+
+    rep('Запускаю установщик (это может занять несколько минут)…', 0.55);
+    await new Promise((resolve, reject) => {
+      const p = spawn(javaExe, ['-jar', installer, '--installClient', DIRS.root], { cwd: DIRS.root, windowsHide: true });
+      const job = jobs.getStore();
+      if (job) { job.procs.add(p); if (job.cancelled) p.kill(); }
+      let tail = '';
+      const f1 = lineFeeder(l => { tail = (tail + l + '\n').slice(-4000); if (onLog) onLog(l); });
+      const f2 = lineFeeder(l => { tail = (tail + l + '\n').slice(-4000); if (onLog) onLog(l); });
+      p.stdout.on('data', f1.push); p.stderr.on('data', f2.push);
+      p.on('error', reject);
+      p.on('close', code => { f1.flush(); f2.flush(); if (job) job.procs.delete(p); if (job && job.cancelled) return reject(new Error(CANCELLED)); code === 0 ? resolve() : reject(new Error(`Установщик завершился с кодом ${code}\n${tail.slice(-600)}`)); });
+    });
+  } finally {
+    // установщик, его журнал и временный launcher_profiles.json после установки не нужны
+    await fsp.rm(installer, { force: true }).catch(() => {});
+    await fsp.rm(installer + '.log', { force: true }).catch(() => {});
+    await fsp.rmdir(DIRS.installers).catch(() => {});   // пустая папка не нужна; если в ней чужой файл, останется
+    if (!hadProfiles) await fsp.rm(profiles, { force: true }).catch(() => {});
+  }
   let id = info.expectedId;
   if (!fs.existsSync(path.join(DIRS.versions, id, id + '.json'))) {
     id = listVersionDirs().find(d => !before.has(d));
@@ -685,7 +699,8 @@ async function createInstance({ name, mc, loader, loaderVersion: wantedLoaderVer
 
   await ensureGame(versionId, (t, p) => report(t, 0.05 + 0.95 * p));
   checkCancel();
-  await fsp.mkdir(path.join(instDir(id), 'mods'), { recursive: true });
+  await fsp.mkdir(instDir(id), { recursive: true });
+  if (loader !== 'vanilla') await fsp.mkdir(path.join(instDir(id), 'mods'), { recursive: true });   // у чистой ванили папка модов не нужна
 
   const inst = {
     id, name: title, mc, loader, loaderVersion, versionId,
@@ -881,7 +896,8 @@ async function launch(inst, account, report, onLog, onExit, onReady, onMinimize,
   if (running.has(inst.id)) throw new Error('Эта установка уже запущена');
   const g = await ensureGame(inst.versionId, report, { verify: false });
   const gameDir = instDir(inst.id);
-  await fsp.mkdir(path.join(gameDir, 'mods'), { recursive: true });
+  await fsp.mkdir(gameDir, { recursive: true });
+  if (inst.loader !== 'vanilla') await fsp.mkdir(path.join(gameDir, 'mods'), { recursive: true });
   const nativesDir = path.join(DIRS.versions, g.v._jarId, 'natives');
   await fsp.rm(nativesDir, { recursive: true, force: true }).catch(() => { /* файлы может держать ещё запущенная игра */ });
   await extractNatives(g.libs, nativesDir);
@@ -1539,6 +1555,9 @@ async function packVersions(slug) {
     .map(v => ({ id: v.id, name: v.name, number: v.version_number, type: v.version_type, mc: v.game_versions || [], loaders: v.loaders || [], date: v.date_published }));
 }
 
+/* скачанный файл сборки удаляется после установки вместе с пустой папкой packs */
+function dropTempPack(file) { fsp.rm(file, { force: true }).then(() => fsp.rmdir(path.dirname(file))).catch(() => {}); }
+
 async function fetchPackFile({ slug, versionId }, report) {
   const vs = await fetchJson(`${URLS.modrinth}/project/${encodeURIComponent(slug)}/version`);
   const ver = (versionId && vs.find(v => v.id === versionId)) || vs.find(v => v.version_type === 'release') || vs[0];
@@ -1614,7 +1633,7 @@ async function installMrpack(opts, report, onLog, onFile) {
     if (inst) { try { await deleteInstance(inst.id); } catch { /* уже удалена */ } }
     throw e;
   } finally {
-    if (temp) fsp.rm(file, { force: true }).catch(() => {});
+    if (temp) dropTempPack(file);
   }
 }
 
@@ -1871,7 +1890,7 @@ async function installCfPack(opts, report, onLog, onFile) {
     if (inst) { try { await deleteInstance(inst.id); } catch { /* уже удалена */ } }
     throw e;
   } finally {
-    if (temp) fsp.rm(file, { force: true }).catch(() => {});
+    if (temp) dropTempPack(file);
   }
 }
 

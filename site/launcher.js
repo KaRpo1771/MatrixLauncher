@@ -314,7 +314,7 @@
       t.textContent = 'Устанавливаю обновление'; sub.textContent = 'Лаунчер сейчас перезапустится'; btn.hidden = true;
       bar.hidden = false; bar.value = 100;
     } else if (u.error) {
-      t.textContent = 'Не удалось обновить'; sub.textContent = u.error; btn.textContent = 'Повторить';
+      t.textContent = 'Не удалось обновить'; sub.textContent = u.error; btn.textContent = u.canInstall ? 'Повторить' : 'Скачать';
     } else {
       t.textContent = `Доступна версия v${u.latest}`; sub.textContent = `Сейчас v${u.current}`;
       btn.textContent = u.canInstall ? 'Обновить' : 'Скачать';
