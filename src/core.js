@@ -1931,10 +1931,21 @@ async function cfRequest(pathname, { params, body } = {}) {
   return (await r.json());
 }
 
+/* У шейдеров CurseForge нет загрузчика (modLoader = 0): движки Iris, OptiFine, Oculus, Canvas указаны
+   среди «версий игры» файлов, как метки. Достаём их оттуда, чтобы карточки были как у Modrinth. */
+const CF_ENGINES = /^(iris|oculus|optifine|canvas)\b/i;
+function cfShaderEngines(m) {
+  const found = new Set();
+  const add = v => { const x = String(v || '').trim().match(CF_ENGINES); if (x) found.add(x[1].toLowerCase()); };
+  for (const f of m.latestFiles || []) (f.gameVersions || []).forEach(add);
+  for (const f of m.latestFiles || []) (f.sortableGameVersions || []).forEach(v => { add(v.gameVersionName); add(v.gameVersion); });
+  return ['iris', 'oculus', 'optifine', 'canvas'].filter(e => found.has(e));
+}
+
 /* карточка в общем формате сайта */
 function cfCard(m, kind) {
   const idx = m.latestFilesIndexes || [];
-  const loaders = [...new Set(idx.map(x => CF_LOADER_NAME[x.modLoader]).filter(Boolean))];
+  const loaders = kind === 'shader' ? cfShaderEngines(m) : [...new Set(idx.map(x => CF_LOADER_NAME[x.modLoader]).filter(Boolean))];
   const versions = [...new Set(idx.map(x => x.gameVersion).filter(v => /^\d+\.\d+/.test(v)))];
   return {
     id: `curseforge:${m.id}`, slug: m.slug, cfId: m.id, title: m.name,

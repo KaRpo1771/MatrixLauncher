@@ -1381,7 +1381,7 @@ input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
 #stHide .dc-toggle[disabled]{cursor:not-allowed}
 
 /* ---------- окна установки и настроек экземпляра: шире ---------- */
-dialog.lc-dlg[data-kind="create"],dialog.lc-dlg[data-kind="settings"]{width:min(820px,calc(100vw - 24px))}
+dialog.lc-dlg[data-kind="create"]{width:min(820px,calc(100vw - 24px))}
 
 /* ---------- окно падения игры ---------- */
 dialog.lc-dlg[data-kind="crash"]{width:min(860px,calc(100vw - 24px))}
@@ -1531,12 +1531,12 @@ html::-webkit-scrollbar{width:0!important;height:0!important;display:none!import
 }
 
 /* ---------- настройки экземпляра: вкладки слева, содержимое справа ---------- */
-dialog.lc-dlg[data-kind="settings"]{width:min(920px,calc(100vw - 24px));max-width:none}
+dialog.lc-dlg[data-kind="settings"]{width:min(1180px,calc(100vw - 24px));max-width:none}
 dialog.lc-dlg[data-kind="settings"][open]{display:flex;flex-direction:column;height:min(720px,calc(100vh - 32px));max-height:none;overflow:hidden}
 dialog.lc-dlg[data-kind="settings"] .m-head{flex:none}
 dialog.lc-dlg[data-kind="settings"] .m-foot{flex:none;justify-content:flex-end;gap:12px}
 dialog.lc-dlg[data-kind="settings"] .m-body{flex:1;min-height:0;max-height:none;padding:0;overflow:hidden;display:block}
-.set-wrap{display:grid;grid-template-columns:208px minmax(0,1fr);height:100%;margin:0}
+.set-wrap{display:grid;grid-template-columns:230px minmax(0,1fr);height:100%;margin:0}
 .set-nav{display:flex;flex-direction:column;gap:6px;padding:14px 12px;border-right:1px solid var(--line);overflow-y:auto;background:color-mix(in srgb,var(--bg) 55%,var(--surface))}
 .set-tab{display:grid;gap:2px;text-align:left;padding:10px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);font:inherit;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
 .set-tab:hover{background:color-mix(in srgb,var(--text) 7%,transparent);color:var(--text)}
@@ -1546,8 +1546,9 @@ dialog.lc-dlg[data-kind="settings"] .m-body{flex:1;min-height:0;max-height:none;
 .set-tab .st-t small{font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 24%,transparent)}
 .set-tab .st-s{font-size:12px;line-height:1.3;opacity:.85}
 .set-panes{min-width:0;min-height:0;overflow:hidden}
-.set-pane{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:16px;height:100%;padding:18px 20px 24px;overflow-y:auto;animation:setIn .18s ease-out}
+.set-pane{overflow-x:hidden;display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:16px;height:100%;padding:18px 20px 24px;overflow-y:auto;animation:setIn .18s ease-out}
 .set-pane[hidden]{display:none}
+.set-pane>*,.lc-mods,.mods-head,.lc-mods .vrow{min-width:0;max-width:100%}
 @keyframes setIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 /* ряды кнопок: ровные промежутки, ничего не слипается */
 .set-pane .lc-install{gap:10px 12px}
