@@ -397,6 +397,18 @@ async function javaStatus() {
   });
   return { list, offline, running: running.size > 0 };
 }
+/* Удалить скачанную Java (папка runtime/<comp>). Лаунчер докачает её сам, если она понадобится для запуска игры. */
+async function javaRemove(comp) {
+  if (running.size) throw new Error('Сначала закройте игру: файлы Java сейчас используются');
+  let names = [];
+  try { names = fs.readdirSync(DIRS.runtime); } catch { /* папки ещё нет */ }
+  if (typeof comp !== 'string' || !names.includes(comp)) throw new Error('Такой Java нет среди скачанных');   // только имена из самой папки, никаких путей
+  const dir = path.join(DIRS.runtime, comp);
+  await fsp.rm(path.join(dir, '.ok'), { force: true });     // сначала снимаем метку «скачана», чтобы недоудалённая папка не считалась рабочей
+  await fsp.rm(dir, { recursive: true, force: true });
+  if (fs.existsSync(dir)) throw new Error('Не удалось удалить папку Java: возможно, её использует другая программа');
+  return { comp };
+}
 /* Проверить и докачать все установленные Java по актуальному списку Mojang (изменившиеся и повреждённые файлы заменяются) */
 async function javaUpdate(report) {
   if (running.size) throw new Error('Сначала закройте игру: файлы Java сейчас используются');
@@ -425,6 +437,60 @@ async function javaUpdate(report) {
     });
     await fsp.writeFile(ok, javaMarker(arr[0].version && arr[0].version.name));
     out.push({ comp, before, after: javaReleaseVersion(comp) || arr[0].version.name, changed });
+  }
+  return out;
+}
+
+/* ---------- выборочная установка Java ---------- */
+/* Основная версия Java из имени сборки Mojang: «8u51-cacert462b08» → 8, «21.0.7.6.1» → 21, «17.0.8» → 17 */
+function javaMajorOf(name) {
+  const m = /^(\d+)u/.exec(String(name || '')) || /^(?:1\.)?(\d+)/.exec(String(name || ''));
+  return m ? m[1] : '';
+}
+/* Все рантаймы Mojang, доступные для этой системы: [{ comp, major, latest, installed, upToDate }] */
+async function javaCatalog() {
+  const all = await fetchJson(URLS.javaAll);
+  const plat = all[javaKey()] || {};
+  const list = Object.keys(plat).filter(comp => plat[comp] && plat[comp].length).map(comp => {
+    const latest = plat[comp][0].version ? String(plat[comp][0].version.name || '') : '';
+    const installed = fs.existsSync(javaExePath(comp)) && fs.existsSync(path.join(DIRS.runtime, comp, '.ok'));
+    const build = installed ? javaBuildName(comp) : '';
+    return { comp, major: javaMajorOf(latest), latest, installed, upToDate: installed && !!build && build === latest };
+  });
+  // сначала новые версии: по убыванию основной версии, внутри неё по имени компонента
+  list.sort((a, b) => (Number(b.major) || 0) - (Number(a.major) || 0) || a.comp.localeCompare(b.comp));
+  return { list, running: running.size > 0 };
+}
+/* Скачать только выбранные рантаймы (comps: массив имён компонентов, например ['jre-legacy', 'java-runtime-delta']).
+   Уже установленные пропускаются, обновляет их javaUpdate. */
+async function javaInstall(comps, report) {
+  if (!Array.isArray(comps) || !comps.length) throw new Error('Не выбрано ни одной версии Java');
+  report('Java: получаю список версий', 0);
+  const all = await fetchJson(URLS.javaAll);
+  const plat = all[javaKey()] || {};
+  const want = [...new Set(comps.map(String))];
+  for (const comp of want) {
+    if (!plat[comp] || !plat[comp].length) throw new Error(`Java (${comp}) недоступна для ${javaKey()}`);
+  }
+  const todo = want.filter(comp => !(fs.existsSync(javaExePath(comp)) && fs.existsSync(path.join(DIRS.runtime, comp, '.ok'))));
+  const out = [];
+  for (let ci = 0; ci < todo.length; ci++) {
+    const comp = todo[ci];
+    const entry = plat[comp][0];
+    const manifest = await fetchJson(entry.manifest.url);
+    const files = Object.entries(manifest.files).filter(([, f]) => f.type === 'file');
+    const ok = path.join(DIRS.runtime, comp, '.ok');
+    await fsp.rm(ok, { force: true });          // пока идёт скачивание, Java считается неполной
+    let done = 0;
+    await pool(files, 12, async ([name, f]) => {
+      const dest = path.join(DIRS.runtime, comp, name);
+      await download(f.downloads.raw.url, dest, { sha1: f.downloads.raw.sha1 });
+      if (f.executable && OS !== 'windows') await fsp.chmod(dest, 0o755);
+      done++;
+      if (done % 20 === 0 || done === files.length) report(`Java ${comp}: ${done}/${files.length}`, (ci + done / files.length) / todo.length);
+    });
+    await fsp.writeFile(ok, javaMarker(entry.version && entry.version.name));
+    out.push({ comp, major: javaMajorOf(entry.version && entry.version.name) });
   }
   return out;
 }
@@ -750,7 +816,52 @@ async function deleteInstance(id) {
   getInstance(id);
   saveInstances(loadInstances().filter(i => i.id !== id));
   syncWatchers();
+  await unlinkSaves(instDir(id));   // общие миры не должны удалиться вместе с экземпляром
   await fsp.rm(instDir(id), { recursive: true, force: true });
+}
+
+/* ---------- общие миры ----------
+   Папка saves у каждого экземпляра — ссылка (junction на Windows, symlink на остальных системах) на одну общую
+   папку <root>/shared-saves, поэтому миры из одного экземпляра видны во всех остальных.
+   Уже существующие миры экземпляра при первом запуске переносятся в общую папку; если там уже есть мир
+   с таким же именем, перенесённый получает приписку с названием экземпляра. */
+function sharedSavesDir() { return path.join(DIRS.root, 'shared-saves'); }
+async function unlinkSaves(gameDir) {
+  const link = path.join(gameDir, 'saves');
+  try {
+    const st = await fsp.lstat(link);
+    if (!st.isSymbolicLink()) return;
+    try { await fsp.unlink(link); } catch { await fsp.rmdir(link); }   // junction в Windows удаляется через rmdir
+  } catch { /* ссылки нет */ }
+}
+async function linkSaves(inst, gameDir, onLog) {
+  const shared = sharedSavesDir(), link = path.join(gameDir, 'saves');
+  try {
+    await fsp.mkdir(shared, { recursive: true });
+    let st = null;
+    try { st = await fsp.lstat(link); } catch { /* папки нет */ }
+    if (st && st.isSymbolicLink()) {
+      let same = false;
+      try { same = path.resolve(gameDir, await fsp.readlink(link)).replace(/[\\/]+$/, '').toLowerCase() === path.resolve(shared).toLowerCase(); } catch { /* битая ссылка */ }
+      if (same) return;
+      await unlinkSaves(gameDir);
+    } else if (st && st.isDirectory()) {
+      let moved = 0;
+      for (const name of await fsp.readdir(link)) {
+        let to = name, n = 1;
+        while (fs.existsSync(path.join(shared, to))) to = `${name} (${inst.name}${n > 1 ? ' ' + n : ''})`, n++;
+        await fsp.rename(path.join(link, name), path.join(shared, to));
+        moved++;
+      }
+      await fsp.rmdir(link);
+      if (moved) onLog(`Миры экземпляра перенесены в общую папку: ${moved}`);
+    } else if (st) {
+      return;   // на месте saves лежит что-то странное (файл): не трогаем
+    }
+    await fsp.symlink(shared, link, 'junction');
+  } catch (e) {
+    onLog(`Общие миры не подключены (${e.message}), используются миры самого экземпляра`);
+  }
 }
 
 const running = new Map();
@@ -908,6 +1019,7 @@ async function launch(inst, account, report, onLog, onExit, onReady, onMinimize,
   const gameDir = instDir(inst.id);
   await fsp.mkdir(gameDir, { recursive: true });
   if (inst.loader !== 'vanilla') await fsp.mkdir(path.join(gameDir, 'mods'), { recursive: true });
+  await linkSaves(inst, gameDir, onLog);
   const nativesDir = path.join(DIRS.versions, g.v._jarId, 'natives');
   await fsp.rm(nativesDir, { recursive: true, force: true }).catch(() => { /* файлы может держать ещё запущенная игра */ });
   await extractNatives(g.libs, nativesDir);
@@ -1076,6 +1188,103 @@ async function installModFile({ instanceId, url, filename, title, slug, version 
   return [{ projectId: slug || name, slug, title, file: name, version, dependency: false, cached: how === 'cached' }];
 }
 
+/* ---------- ресурспаки и шейдеры: обычные .zip в resourcepacks / shaderpacks, загрузчик модов не нужен ---------- */
+const RES_DIR = { resourcepack: 'resourcepacks', shader: 'shaderpacks' };
+const resKind = k => { if (!RES_DIR[k]) throw new Error('Неизвестный тип: ожидался ресурспак или шейдер'); return k; };
+
+function resFileName(filename, slug, version) {
+  let name = path.basename(String(filename || '').replace(/\\/g, '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  if (!name) name = `${slug || 'pack'}-${version || 'file'}`.replace(/[^\w.\-+]/g, '_');
+  if (!/\.zip$/i.test(name)) name += '.zip';
+  return name;
+}
+
+/* запоминаем, что именно поставили (чтобы при обновлении убрать старую версию того же проекта) */
+function rememberPack(instId, kind, rec) {
+  const all = loadInstances();
+  const inst = all.find(i => i.id === instId);
+  if (!inst) return;
+  inst.packs = (inst.packs || []).filter(x => !(x.kind === kind && (x.file === rec.file || x.projectId === rec.projectId || (rec.slug && x.slug === rec.slug))))
+    .concat([{ kind, ...rec }]);
+  saveInstances(all);
+}
+async function dropOldPack(instId, kind, dir, projectId, slug, keepFile) {
+  // тот же проект могли поставить и автоподбором (по id), и из списка версий (по слагу), ищем по обоим признакам
+  const prev = ((loadInstances().find(i => i.id === instId) || {}).packs || [])
+    .filter(x => x.kind === kind && x.file !== keepFile && (x.projectId === projectId || (slug && x.slug === slug)));
+  for (const x of prev) await fsp.rm(path.join(dir, x.file), { force: true }).catch(() => {});
+}
+
+/* Версия из списка версий карточки (прямая ссылка на файл) в папку выбранного экземпляра */
+async function installResourceFile({ instanceId, kind, url, filename, title, slug, version }, report) {
+  resKind(kind);
+  const inst = getInstance(instanceId);
+  if (!/^https:\/\//i.test(String(url || ''))) throw new Error('Для этой версии нет прямой ссылки на файл');
+  const dir = path.join(instDir(inst.id), RES_DIR[kind]);
+  await fsp.mkdir(dir, { recursive: true });
+  const name = resFileName(filename, slug, version);
+  const how = await fetchModFile({ url, dest: path.join(dir, name), file: name, isDep: false, report });
+  const projectId = String(slug || name);
+  await dropOldPack(inst.id, kind, dir, projectId, String(slug || ''), name);
+  rememberPack(inst.id, kind, { projectId, slug: String(slug || ''), title: title || name, file: name, version: version || '' });
+  return [{ projectId, slug, title, file: name, version, kind, cached: how === 'cached' }];
+}
+
+/* Лучшая версия проекта под Minecraft экземпляра (Modrinth или CurseForge) */
+async function installResource({ instanceId, kind, source, slug, cfId }, report) {
+  resKind(kind);
+  const inst = getInstance(instanceId);
+  const label = kind === 'shader' ? 'шейдера' : 'ресурспака';
+  const dir = path.join(instDir(inst.id), RES_DIR[kind]);
+  await fsp.mkdir(dir, { recursive: true });
+
+  if (source === 'curseforge') {
+    const id = String(cfId || slug);
+    const mod = (await cfRequest(`/mods/${encodeURIComponent(id)}`)).data;
+    const file = await cfPickFile(id, inst.mc, []);
+    if (!file) throw new Error(`Для Minecraft ${inst.mc} у «${mod.name}» нет подходящей версии на CurseForge. Другие версии можно выбрать в списке версий на карточке.`);
+    if (mod.allowModDistribution === false && !file.downloadUrl) {
+      throw new Error(`Автор «${mod.name}» запретил скачивание сторонними программами, скачайте файл вручную: ${(mod.links && mod.links.websiteUrl) || 'страница на CurseForge'}`);
+    }
+    const url = cfFileUrl(file);
+    if (!CF_HOST(new URL(url).hostname)) throw new Error('Файл размещён на неизвестном сервере');
+    const name = resFileName(path.basename(file.fileName));
+    const how = await fetchModFile({ url, dest: path.join(dir, name), sha1: cfSha1(file), size: file.fileLength, file: name, isDep: false, report });
+    const projectId = 'cf:' + id;
+    await dropOldPack(inst.id, kind, dir, projectId, id, name);
+    const rec = { projectId, slug: id, title: mod.name, file: name, version: file.displayName || '', source: 'curseforge' };
+    rememberPack(inst.id, kind, rec);
+    return [{ ...rec, kind, cached: how === 'cached' }];
+  }
+
+  // Modrinth: у ресурспаков и шейдеров нет «загрузчика», подбираем только по версии игры
+  const q = new URLSearchParams({ game_versions: JSON.stringify([inst.mc]) });
+  const vs = await fetchJson(`${URLS.modrinth}/project/${encodeURIComponent(slug)}/version?${q}`);
+  const ver = vs.find(v => v.version_type === 'release') || vs[0];
+  if (!ver) throw new Error(`Для Minecraft ${inst.mc} у этого ${label} нет подходящей версии. Другие версии можно выбрать в списке версий на карточке.`);
+  const f = ver.files.find(x => x.primary) || ver.files[0];
+  if (!f) throw new Error('У версии нет файлов');
+  const name = resFileName(f.filename, slug, ver.version_number);
+  const how = await fetchModFile({ url: f.url, dest: path.join(dir, name), sha1: f.hashes && f.hashes.sha1, size: f.size, file: name, isDep: false, report });
+  let title = slug;
+  try { title = (await fetchJson(`${URLS.modrinth}/project/${ver.project_id}`)).title; } catch { /* название необязательно */ }
+  const rec = { projectId: ver.project_id, slug: String(slug), title, file: name, version: ver.version_number, source: 'modrinth' };
+  await dropOldPack(inst.id, kind, dir, ver.project_id, String(slug), name);
+  rememberPack(inst.id, kind, rec);
+  return [{ ...rec, kind, cached: how === 'cached' }];
+}
+
+/* Установленные ресурспаки или шейдеры экземпляра (zip и папки) */
+function listResources(instanceId, kind) {
+  resKind(kind);
+  const inst = getInstance(instanceId);
+  const dir = path.join(instDir(inst.id), RES_DIR[kind]);
+  let names = [];
+  try { names = fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory() || /\.zip$/i.test(d.name)).map(d => d.name); } catch { /* папки ещё нет */ }
+  const known = new Map(((inst.packs || []).filter(x => x.kind === kind)).map(x => [x.file, x]));
+  return names.map(f => { const k = known.get(f) || {}; return { file: f, title: k.title || f, slug: k.slug || '', version: k.version || '' }; });
+}
+
 /* Пакетная установка (избранное): ошибка одного мода не останавливает остальные */
 async function installMods({ instanceId, slugs }, report) {
   const seen = new Set();
@@ -1101,19 +1310,43 @@ async function installMods({ instanceId, slugs }, report) {
   return results;
 }
 
-function listMods(instanceId) {
+/* Выключенный мод = файл «имя.jar.disabled» (так делают Prism и Modrinth App): загрузчик его не видит, а лаунчер помнит.
+   opts.all: вернуть и выключенные (для списка в настройках экземпляра). Остальным (проверка совместимости, поиск Iris и т. п.) нужны только включённые. */
+const DIS = '.disabled';
+function listMods(instanceId, opts = {}) {
   const inst = getInstance(instanceId);
   const dir = path.join(instDir(inst.id), 'mods');
-  let files = [];
-  try { files = fs.readdirSync(dir).filter(f => f.endsWith('.jar')); } catch { /* папки ещё нет */ }
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { /* папки ещё нет */ }
+  const on = names.filter(f => f.endsWith('.jar'));
+  const off = opts.all ? names.filter(f => f.endsWith('.jar' + DIS)).map(f => f.slice(0, -DIS.length)).filter(f => !on.includes(f)) : [];
   const known = new Map((inst.mods || []).map(m => [m.file, m]));
-  return files.map(f => { const k = known.get(f) || {}; return { file: f, title: k.title || f, dependency: !!k.dependency, slug: k.slug || '', projectId: k.projectId || '', version: k.version || '' }; });
+  const row = (f, enabled) => { const k = known.get(f) || {}; return { file: f, enabled, title: k.title || f, dependency: !!k.dependency, slug: k.slug || '', projectId: k.projectId || '', version: k.version || '' }; };
+  return on.map(f => row(f, true)).concat(off.map(f => row(f, false))).sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+}
+
+/* file всегда в «включённом» виде (x.jar); на диске файл либо x.jar, либо x.jar.disabled */
+async function toggleMod(instanceId, file, enabled) {
+  const inst = getInstance(instanceId);
+  if (path.basename(file) !== file || !/\.jar$/i.test(file)) throw new Error('Некорректное имя файла');
+  if (running.has(inst.id)) throw new Error('Сначала закройте игру: файлы модов сейчас используются');
+  const dir = path.join(instDir(inst.id), 'mods');
+  const onP = path.join(dir, file), offP = onP + DIS;
+  const [from, to] = enabled ? [offP, onP] : [onP, offP];
+  if (!fs.existsSync(from)) {
+    if (fs.existsSync(to)) return { file, enabled: !!enabled };   // уже в нужном состоянии
+    throw new Error('Файл мода не найден в папке mods');
+  }
+  if (fs.existsSync(to)) throw new Error(`В папке mods уже есть «${path.basename(to)}». Удалите лишнюю копию, потом переключите мод.`);
+  await fsp.rename(from, to);
+  return { file, enabled: !!enabled };
 }
 
 async function removeMod(instanceId, file) {
   const inst = getInstance(instanceId);
   if (path.basename(file) !== file) throw new Error('Некорректное имя файла');
   await fsp.rm(path.join(instDir(inst.id), 'mods', file), { force: true });
+  await fsp.rm(path.join(instDir(inst.id), 'mods', file + DIS), { force: true });   // если мод был выключен
   const all = loadInstances();
   const rec = all.find(i => i.id === inst.id);
   rec.mods = (rec.mods || []).filter(m => m.file !== file);
@@ -1557,6 +1790,20 @@ function packDest(base, rel) {
   return full;
 }
 
+/* файлы сборки, нужные клиенту, с проверкой путей и серверов до начала установки */
+function mrpackFiles(pack) {
+  const files = (pack.index.files || []).filter(f => !(f.env && f.env.client === 'unsupported'));
+  for (const f of files) {
+    packDest('/x', f.path);                                  // проверка пути до начала установки
+    const urls = (f.downloads || []);
+    if (!urls.length) throw new Error(`Нет адреса загрузки для ${f.path}`);
+    if (!urls.some(u => { try { const h = new URL(u); return h.protocol === 'https:' && PACK_HOSTS.includes(h.hostname); } catch { return false; } })) {
+      throw new Error(`Файл ${f.path} размещён на неразрешённом сервере`);
+    }
+  }
+  return files;
+}
+
 async function packVersions(slug) {
   const proj = await fetchJson(`${URLS.modrinth}/project/${encodeURIComponent(slug)}`);
   if (proj.project_type !== 'modpack') throw new Error('Это не сборка');
@@ -1564,6 +1811,50 @@ async function packVersions(slug) {
   return vs.filter(v => (v.files || []).some(f => /\.mrpack$/i.test(f.filename)))
     .map(v => ({ id: v.id, name: v.name, number: v.version_number, type: v.version_type, mc: v.game_versions || [], loaders: v.loaders || [], date: v.date_published }));
 }
+
+
+/* Скачивание файлов сборки .mrpack в папку экземпляра. added: сюда попадают пути новых файлов (для отката при ошибке). */
+async function downloadMrpackFiles(files, dir, { report, onFile, from = 0.6, span = 0.35, added }) {
+  let done = 0;
+  await pool(files, 4, async f => {
+    const dest = packDest(dir, f.path);
+    const existed = fs.existsSync(dest);
+    let lastErr;
+    for (const url of f.downloads) {
+      let h; try { h = new URL(url); } catch { continue; }
+      if (h.protocol !== 'https:' || !PACK_HOSTS.includes(h.hostname)) continue;
+      try {
+        const name = path.basename(f.path);
+        if (onFile) onFile({ file: name, received: 0, total: f.fileSize || 0 });
+        await download(url, dest, {
+          sha1: f.hashes && f.hashes.sha1,
+          onProgress: (g, t) => onFile && onFile({ file: name, received: g, total: t || f.fileSize || 0 })
+        });
+        if (onFile) onFile({ file: name, received: 1, total: 1, done: true });
+        lastErr = null; break;
+      } catch (e) { lastErr = e; }
+    }
+    if (lastErr) throw new Error(`Не удалось скачать ${f.path}: ${lastErr.message}`);
+    if (added && !existed) added.push(dest);
+    done++; report(`Скачано файлов: ${done} из ${files.length}`, from + span * done / files.length);
+  });
+}
+
+/* Файлы из overrides сборки. keepUser: при обновлении не трогать настройки игрока, серверы, миры и скриншоты. */
+const USER_FILES = /^(options(of|shaders)?\.txt|servers\.dat(_old)?|saves\/|screenshots\/|logs\/|crash-reports\/)/i;
+async function applyOverrides(zip, prefixes, dir, { keepUser = false } = {}) {
+  for (const prefix of prefixes) {
+    for (const e of zip.getEntries()) {
+      if (e.isDirectory || !e.entryName.startsWith(prefix)) continue;
+      const rel = e.entryName.slice(prefix.length);
+      const dest = packDest(dir, rel);
+      if (keepUser && USER_FILES.test(rel.replace(/\\/g, '/')) && fs.existsSync(dest)) continue;
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.writeFile(dest, e.getData());
+    }
+  }
+}
+const applyMrpackOverrides = (pack, dir, o) => applyOverrides(pack.zip, ['overrides/', 'client-overrides/'], dir, o);
 
 /* скачанный файл сборки удаляется после установки вместе с пустой папкой packs */
 function dropTempPack(file) { fsp.rm(file, { force: true }).then(() => fsp.rmdir(path.dirname(file))).catch(() => {}); }
@@ -1577,65 +1868,31 @@ async function fetchPackFile({ slug, versionId }, report) {
   const dest = path.join(DIRS.root, 'packs', crypto.randomBytes(3).toString('hex') + '-' + path.basename(f.filename));
   report(`Скачиваю сборку ${f.filename}`, 0.01);
   await download(f.url, dest, { sha1: f.hashes && f.hashes.sha1 });
-  return dest;
+  return { dest, ver };
 }
 
 /* Установка сборки: новый экземпляр с нужной версией игры и загрузчиком, затем файлы сборки и overrides.
    opts: { file }, локальный .mrpack, или { slug, versionId }, сборка с Modrinth. */
 async function installMrpack(opts, report, onLog, onFile) {
-  let file = opts.file, temp = false;
+  let file = opts.file, temp = false, origin = null;
   if (!file) {
     if (!opts.slug) throw new Error('Не указана сборка');
-    file = await fetchPackFile(opts, report); temp = true;
+    const got = await fetchPackFile(opts, report); file = got.dest; temp = true;
+    origin = { source: 'modrinth', slug: String(opts.slug), projectId: got.ver.project_id, versionId: got.ver.id };
   }
   const pack = readMrpack(file);
-  const files = (pack.index.files || []).filter(f => !(f.env && f.env.client === 'unsupported'));
-  for (const f of files) {
-    packDest('/x', f.path);                                  // проверка пути до начала установки
-    const urls = (f.downloads || []);
-    if (!urls.length) throw new Error(`Нет адреса загрузки для ${f.path}`);
-    if (!urls.some(u => { try { const h = new URL(u); return h.protocol === 'https:' && PACK_HOSTS.includes(h.hostname); } catch { return false; } })) {
-      throw new Error(`Файл ${f.path} размещён на неразрешённом сервере`);
-    }
-  }
+  const files = mrpackFiles(pack);
   report(`Сборка «${pack.name}»: Minecraft ${pack.mc}, ${LOADER_NAMES[pack.loader] || 'Vanilla'}`, 0.02);
   let inst = null;
   try {
     inst = await module.exports.createInstance({ name: pack.name, mc: pack.mc, loader: pack.loader, loaderVersion: pack.loaderVersion, exactLoader: true, ramAuto: true },
       (t, p) => report(t, 0.02 + 0.58 * p), onLog);
     const dir = instDir(inst.id);
-    let done = 0;
-    await pool(files, 4, async f => {
-      const dest = packDest(dir, f.path);
-      let lastErr;
-      for (const url of f.downloads) {
-        let h; try { h = new URL(url); } catch { continue; }
-        if (h.protocol !== 'https:' || !PACK_HOSTS.includes(h.hostname)) continue;
-        try {
-          const name = path.basename(f.path);
-          if (onFile) onFile({ file: name, received: 0, total: f.fileSize || 0 });
-          await download(url, dest, {
-            sha1: f.hashes && f.hashes.sha1,
-            onProgress: (g, t) => onFile && onFile({ file: name, received: g, total: t || f.fileSize || 0 })
-          });
-          if (onFile) onFile({ file: name, received: 1, total: 1, done: true });
-          lastErr = null; break;
-        } catch (e) { lastErr = e; }
-      }
-      if (lastErr) throw new Error(`Не удалось скачать ${f.path}: ${lastErr.message}`);
-      done++; report(`Скачано файлов: ${done} из ${files.length}`, 0.6 + 0.35 * done / files.length);
-    });
+    await downloadMrpackFiles(files, dir, { report, onFile, from: 0.6, span: 0.35 });
     report('Копирую настройки и файлы сборки', 0.96);
-    for (const prefix of ['overrides/', 'client-overrides/']) {
-      for (const e of pack.zip.getEntries()) {
-        if (e.isDirectory || !e.entryName.startsWith(prefix)) continue;
-        const dest = packDest(dir, e.entryName.slice(prefix.length));
-        await fsp.mkdir(path.dirname(dest), { recursive: true });
-        await fsp.writeFile(dest, e.getData());
-      }
-    }
+    await applyMrpackOverrides(pack, dir);
     const all = loadInstances(); const rec = all.find(i => i.id === inst.id);
-    rec.pack = { name: pack.name, version: String(pack.index.versionId || ''), files: files.length };
+    rec.pack = { name: pack.name, version: String(pack.index.versionId || ''), files: files.length, ...(origin || {}), managed: files.map(f => f.path) };
     saveInstances(all);
     report('Сборка установлена', 1);
     return { ...rec, files: files.length };
@@ -1648,10 +1905,13 @@ async function installMrpack(opts, report, onLog, onFile) {
 }
 
 /* ---------- CurseForge (API-ключ встроен: src/curseforge-key.js) ---------- */
-const CF = { base: 'https://api.curseforge.com/v1', game: 432, classMods: 6, classPacks: 4471 };
+const CF = { base: 'https://api.curseforge.com/v1', game: 432, classMods: 6, classPacks: 4471, classResPacks: 12, classShaders: 6552 };
+/* раздел CurseForge по виду карточки: моды, сборки, ресурспаки (Texture Packs), шейдеры */
+const cfClass = kind => (kind === 'modpack' ? CF.classPacks : kind === 'resourcepack' ? CF.classResPacks : kind === 'shader' ? CF.classShaders : CF.classMods);
+const CF_PATH = { mod: 'mc-mods', modpack: 'modpacks', resourcepack: 'texture-packs', shader: 'shaders' };
 const CF_LOADER = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
 const CF_LOADER_NAME = { 1: 'forge', 4: 'fabric', 5: 'quilt', 6: 'neoforge' };
-const CF_SORT = { relevance: 2, downloads: 6, follows: 2, updated: 3, newest: 11 };
+const CF_SORT = { relevance: 2, downloads: 6, follows: 12, updated: 3, newest: 11 };
 let cfKeyProvider = () => null;
 function setCurseKeyProvider(fn) { cfKeyProvider = fn; }
 function hasCurseKey() { return !!cfKeyProvider(); }
@@ -1684,27 +1944,30 @@ function cfCard(m, kind) {
     downloads: m.downloadCount || 0, follows: m.thumbsUpCount || 0,
     categories: (m.categories || []).map(c => c.name),
     loaders, versions, updated: m.dateModified || m.dateReleased || '',
-    url: (m.links && m.links.websiteUrl) || `https://www.curseforge.com/minecraft/${kind === 'modpack' ? 'modpacks' : 'mc-mods'}/${m.slug}`,
+    url: (m.links && m.links.websiteUrl) || `https://www.curseforge.com/minecraft/${CF_PATH[kind] || 'mc-mods'}/${m.slug}`,
     source: 'curseforge', kind, distributable: m.allowModDistribution !== false
   };
 }
 
 async function cfSearch({ query, kind, category, loader, gameVersion, sort, offset, limit }) {
   const p = {
-    gameId: CF.game, classId: kind === 'modpack' ? CF.classPacks : CF.classMods,
+    gameId: CF.game, classId: cfClass(kind),
     sortField: CF_SORT[sort] || 6, sortOrder: 'desc', index: Math.max(0, offset | 0), pageSize: Math.min(50, limit || 24)
   };
+  query = String(query || '').trim();
   if (query) p.searchFilter = query;
+  if (p.index + p.pageSize > 10000) return { total: 10000, items: [] };
   if (category) p.categoryId = category;
   if (gameVersion) p.gameVersion = gameVersion;
-  if (CF_LOADER[loader]) p.modLoaderType = CF_LOADER[loader];
+  /* загрузчик есть только у модов и сборок: у ресурспаков и шейдеров CurseForge с ним ничего не находит */
+  if (CF_LOADER[loader] && (kind === 'mod' || kind === 'modpack' || !kind)) p.modLoaderType = CF_LOADER[loader];
   const j = await cfRequest('/mods/search', { params: p });
   const pg = j.pagination || {};
   return { total: Math.min(pg.totalCount != null ? pg.totalCount : (j.data || []).length, 10000), items: (j.data || []).map(m => cfCard(m, kind)) };
 }
 
 async function cfCategories(kind) {
-  const j = await cfRequest('/categories', { params: { gameId: CF.game, classId: kind === 'modpack' ? CF.classPacks : CF.classMods } });
+  const j = await cfRequest('/categories', { params: { gameId: CF.game, classId: cfClass(kind) } });
   return (j.data || []).filter(c => !c.isClass).map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -1798,7 +2061,7 @@ async function installCfMod({ instanceId, cfId }, report) {
     const how = await fetchModFile({ url, dest: path.join(modsDir, path.basename(file.fileName)), sha1: cfSha1(file), size: file.fileLength, file: file.fileName, isDep, report });
     const prev = known.find(m => m.projectId === 'cf:' + id && m.file !== path.basename(file.fileName));
     if (prev) await fsp.rm(path.join(modsDir, prev.file), { force: true }).catch(() => {});
-    installed.push({ projectId: 'cf:' + id, slug: String(id), title: mod.name, file: path.basename(file.fileName), version: file.displayName || '', dependency: !!isDep, source: 'curseforge', cached: how === 'cached' });
+    installed.push({ projectId: 'cf:' + id, slug: String(id), title: mod.name, file: path.basename(file.fileName), version: file.displayName || '', dependency: !!isDep, source: 'curseforge', fileId: String(file.id), cached: how === 'cached' });
     for (const d of file.dependencies || []) if (d.relationType === 3 && d.modId) await one(d.modId, depth + 1, true);
   }
   await one(cfId, 0, false);
@@ -1839,18 +2102,23 @@ function readCfPack(file) {
   return { zip, man, mc: man.minecraft.version, loader, loaderVersion, name: String(man.name || 'Сборка').slice(0, 40), overrides: String(man.overrides || 'overrides') };
 }
 
+async function fetchCfPackFile(opts, report) {
+  const j = await cfRequest(`/mods/${encodeURIComponent(opts.modId)}/files/${encodeURIComponent(opts.fileId)}`);
+  const f = j.data;
+  if (!f || !/\.zip$/i.test(f.fileName)) throw new Error('У этой версии нет архива сборки');
+  const url = cfFileUrl(f);
+  if (!CF_HOST(new URL(url).hostname)) throw new Error('Файл размещён на неизвестном сервере');
+  const file = path.join(DIRS.root, 'packs', crypto.randomBytes(3).toString('hex') + '-' + path.basename(f.fileName));
+  report(`Скачиваю сборку ${f.fileName}`, 0.01);
+  await download(url, file, { sha1: cfSha1(f) });
+  return { file, origin: { cfId: String(opts.modId), fileId: String(f.id) } };
+}
+
 async function installCfPack(opts, report, onLog, onFile) {
-  let file = opts.file, temp = false;
+  let file = opts.file, temp = false, origin = null;
   if (!file) {
-    const j = await cfRequest(`/mods/${encodeURIComponent(opts.modId)}/files/${encodeURIComponent(opts.fileId)}`);
-    const f = j.data;
-    if (!f || !/\.zip$/i.test(f.fileName)) throw new Error('У этой версии нет архива сборки');
-    const url = cfFileUrl(f);
-    if (!CF_HOST(new URL(url).hostname)) throw new Error('Файл размещён на неизвестном сервере');
-    file = path.join(DIRS.root, 'packs', crypto.randomBytes(3).toString('hex') + '-' + path.basename(f.fileName));
-    report(`Скачиваю сборку ${f.fileName}`, 0.01);
-    await download(url, file, { sha1: cfSha1(f) });
-    temp = true;
+    const got = await fetchCfPackFile(opts, report);
+    file = got.file; temp = true; origin = got.origin;
   }
   const pack = readCfPack(file);
   const refs = (pack.man.files || []).filter(x => x.projectID && x.fileID && x.required !== false);
@@ -1884,15 +2152,10 @@ async function installCfPack(opts, report, onLog, onFile) {
       done++; report(`Скачано модов: ${done} из ${refs.length}`, 0.52 + 0.43 * done / refs.length);
     });
     report('Копирую настройки и файлы сборки', 0.96);
-    const prefix = pack.overrides.replace(/\/+$/, '') + '/';
-    for (const e of pack.zip.getEntries()) {
-      if (e.isDirectory || !e.entryName.startsWith(prefix)) continue;
-      const dest = packDest(dir, e.entryName.slice(prefix.length));
-      await fsp.mkdir(path.dirname(dest), { recursive: true });
-      await fsp.writeFile(dest, e.getData());
-    }
+    await applyOverrides(pack.zip, [pack.overrides.replace(/\/+$/, '') + '/'], dir);
     const all = loadInstances(); const rec = all.find(i => i.id === inst.id);
-    rec.pack = { name: pack.name, version: String(pack.man.version || ''), files: refs.length - skipped.length, source: 'curseforge' };
+    rec.pack = { name: pack.name, version: String(pack.man.version || ''), files: refs.length - skipped.length, source: 'curseforge', ...(origin || {}),
+      managed: refs.map(r => infos.get(r.fileID)).filter(f => f && !skipped.some(x => x.fileId === f.id)).map(f => 'mods/' + path.basename(f.fileName)) };
     saveInstances(all);
     report('Сборка установлена', 1);
     return { ...rec, files: refs.length - skipped.length, skipped };
@@ -1917,12 +2180,435 @@ async function installPackAny(opts, report, onLog, onFile) {
   return installMrpack(opts, report, onLog, onFile);
 }
 
+/* ============================================================
+   Обновления: моды, сборки; копирование экземпляра
+   ============================================================ */
+
+async function modrinthPost(pathname, body) {
+  const r = await fetch(URLS.modrinth + pathname, {
+    method: 'POST', headers: { 'User-Agent': UA, Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error(`Modrinth ответил ${r.status}`);
+  return r.json();
+}
+
+/* Отпечаток файла для поиска на CurseForge: MurmurHash2 (seed 1) по байтам без пробельных 9, 10, 13, 32 */
+function cfFingerprint(buf) {
+  const f = Buffer.allocUnsafe(buf.length); let n = 0;
+  for (let i = 0; i < buf.length; i++) { const b = buf[i]; if (b !== 9 && b !== 10 && b !== 13 && b !== 32) f[n++] = b; }
+  const m = 0x5bd1e995;
+  let h = (1 ^ n) >>> 0, i = 0, len = n;
+  while (len >= 4) {
+    let k = (f[i] | (f[i + 1] << 8) | (f[i + 2] << 16) | (f[i + 3] << 24)) >>> 0;
+    k = Math.imul(k, m) >>> 0; k = (k ^ (k >>> 24)) >>> 0; k = Math.imul(k, m) >>> 0;
+    h = Math.imul(h, m) >>> 0; h = (h ^ k) >>> 0;
+    i += 4; len -= 4;
+  }
+  switch (len) {
+    case 3: h ^= f[i + 2] << 16; // eslint-disable-line no-fallthrough
+    case 2: h ^= f[i + 1] << 8;  // eslint-disable-line no-fallthrough
+    case 1: h ^= f[i]; h = Math.imul(h, m) >>> 0;
+  }
+  h = (h ^ (h >>> 13)) >>> 0; h = Math.imul(h, m) >>> 0; h = (h ^ (h >>> 15)) >>> 0;
+  return h >>> 0;
+}
+
+const safeJarName = (name, fallback) => {
+  let n = path.basename(String(name || '').replace(/\\/g, '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim() || fallback;
+  if (!/\.jar$/i.test(n)) n += '.jar';
+  return n;
+};
+
+/* ---------- обновление модов ----------
+   Modrinth узнаёт мод по SHA-1 файла (подходят и моды из сборок, и положенные вручную);
+   CurseForge: по отпечатку файла и по записям лаунчера. Версия подбирается под игру и загрузчик экземпляра. */
+async function checkModUpdates(instanceId) {
+  const inst = getInstance(instanceId);
+  const loaders = loadersFor(inst.loader);
+  const out = { scanned: 0, tracked: 0, updates: [], errors: [], mc: inst.mc, loader: inst.loader };
+  if (!loaders.length) return out;
+  const dir = path.join(instDir(inst.id), 'mods');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.jar')); } catch { /* папки ещё нет */ }
+  const files = [];
+  for (const f of names) {
+    const full = path.join(dir, f);
+    let st; try { st = fs.statSync(full); } catch { continue; }
+    let sha1 = null; try { sha1 = await sha1File(full); } catch { continue; }
+    const meta = readJar(full, st);
+    files.push({ file: f, full, sha1, title: meta.title || f });
+  }
+  out.scanned = files.length;
+  const known = new Map((inst.mods || []).map(m => [m.file, m]));
+  const matched = new Set();
+
+  // --- Modrinth ---
+  try {
+    const hashes = files.map(f => f.sha1);
+    if (hashes.length) {
+      const cur = await modrinthPost('/version_files', { hashes, algorithm: 'sha1' });
+      const rel = await modrinthPost('/version_files/update', { hashes, algorithm: 'sha1', loaders, game_versions: [inst.mc], version_types: ['release'] });
+      const pre = hashes.filter(h => cur[h] && cur[h].version_type !== 'release');   // бета-версию обновляем до свежей беты
+      const any = pre.length ? await modrinthPost('/version_files/update', { hashes: pre, algorithm: 'sha1', loaders, game_versions: [inst.mc] }) : {};
+      for (const f of files) {
+        const c = cur[f.sha1];
+        if (!c) continue;
+        matched.add(f.file);
+        const latest = any[f.sha1] || rel[f.sha1];
+        if (!latest || latest.id === c.id || !(new Date(latest.date_published) > new Date(c.date_published))) continue;
+        const nf = (latest.files || []).find(x => x.primary) || (latest.files || [])[0];
+        if (!nf || !/^https:\/\//i.test(nf.url)) continue;
+        const k = known.get(f.file) || {};
+        out.updates.push({
+          file: f.file, title: k.title || f.title, source: 'modrinth', projectId: latest.project_id, slug: k.slug || latest.project_id,
+          from: c.version_number, to: latest.version_number, channel: latest.version_type,
+          url: nf.url, filename: nf.filename, sha1: nf.hashes && nf.hashes.sha1, size: nf.size
+        });
+      }
+    }
+  } catch (e) { out.errors.push('Modrinth: ' + e.message); }
+
+  // --- CurseForge ---
+  const rest = files.filter(f => !matched.has(f.file));
+  if (rest.length && hasCurseKey()) {
+    try {
+      const byPrint = new Map();
+      for (const f of rest) { try { byPrint.set(cfFingerprint(await fsp.readFile(f.full)), f); } catch { /* файл исчез */ } }
+      const cfCur = new Map();   // имя файла -> { modId, file }
+      if (byPrint.size) {
+        const j = await cfRequest(`/fingerprints/${CF.game}`, { body: { fingerprints: [...byPrint.keys()] } });
+        for (const m of (j.data && j.data.exactMatches) || []) {
+          const f = byPrint.get(m.file && m.file.fileFingerprint);
+          if (f) cfCur.set(f.file, { modId: String(m.file.modId || m.id), file: m.file });
+        }
+      }
+      for (const f of rest) {      // моды, поставленные лаунчером с CurseForge, но не найденные по отпечатку
+        const k = known.get(f.file);
+        if (!cfCur.has(f.file) && k && String(k.projectId).startsWith('cf:')) cfCur.set(f.file, { modId: String(k.slug), file: null });
+      }
+      const list = rest.filter(f => cfCur.has(f.file));
+      await pool(list, 4, async f => {
+        const { modId, file: cf } = cfCur.get(f.file);
+        matched.add(f.file);
+        try {
+          const best = await cfPickFile(modId, inst.mc, loaders);
+          if (!best || best.fileName === f.file) return;
+          if (cf ? !(String(best.fileDate) > String(cf.fileDate)) : false) return;
+          if (cf && best.id === cf.id) return;
+          const k = known.get(f.file) || {};
+          out.updates.push({
+            file: f.file, title: k.title || f.title, source: 'curseforge', projectId: 'cf:' + modId, slug: modId,
+            from: (cf && (cf.displayName || cf.fileName)) || f.file, to: best.displayName || best.fileName,
+            channel: best.releaseType === 1 ? 'release' : best.releaseType === 2 ? 'beta' : 'alpha',
+            url: cfFileUrl(best), filename: path.basename(best.fileName), sha1: cfSha1(best), size: best.fileLength, fileId: String(best.id)
+          });
+        } catch (e) { out.errors.push(`${f.file}: ${e.message}`); }
+      });
+    } catch (e) { out.errors.push('CurseForge: ' + e.message); }
+  }
+  out.tracked = matched.size;
+  out.updates.sort((a, b) => a.title.localeCompare(b.title));
+  return out;
+}
+
+/* Обновить выбранные моды (files: имена файлов из проверки). Старый файл удаляется только после успешной загрузки нового. */
+async function updateMods({ instanceId, files }, report) {
+  const inst = getInstance(instanceId);
+  if (running.has(inst.id)) throw new Error('Сначала закройте игру');
+  const want = new Set(Array.isArray(files) ? files : []);
+  report('Проверяю обновления', 0.01);
+  const chk = await checkModUpdates(instanceId);
+  checkCancel();
+  const todo = chk.updates.filter(u => want.has(u.file));
+  if (!todo.length) throw new Error('Нечего обновлять: выбранные моды уже актуальны');
+  const modsDir = path.join(instDir(inst.id), 'mods');
+  const done = [], failed = [];
+  const saveRecords = () => {      // выполняется и при отмене: уже обновлённые моды должны попасть в записи
+    const all = loadInstances();
+    const rec = all.find(i => i.id === inst.id);
+    if (!rec) return;
+    for (const u of done) {
+      const old = (rec.mods || []).find(m => m.file === u.file || m.projectId === u.projectId);
+      rec.mods = (rec.mods || []).filter(m => m.file !== u.file && m.file !== u.newFile && m.projectId !== u.projectId)
+        .concat([{ projectId: u.projectId, slug: u.slug, title: u.title, file: u.newFile, version: u.to, dependency: !!(old && old.dependency), ...(u.source === 'curseforge' ? { source: 'curseforge', fileId: u.fileId } : {}) }]);
+    }
+    saveInstances(all);
+  };
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      const u = todo[i];
+      checkCancel();
+      report(`Обновляю ${i + 1} из ${todo.length}: ${u.title}`, i / todo.length);
+      try {
+        if (u.source === 'curseforge' && !CF_HOST(new URL(u.url).hostname)) throw new Error('Файл размещён на неизвестном сервере');
+        const name = safeJarName(u.filename, `${u.slug}-${u.to}`);
+        await fetchModFile({ url: u.url, dest: path.join(modsDir, name), sha1: u.sha1, size: u.size, file: name, isDep: false, report: (t, p, x) => report(null, null, x) });
+        if (name !== u.file) await fsp.rm(path.join(modsDir, u.file), { force: true }).catch(() => {});
+        done.push({ ...u, newFile: name });
+      } catch (e) {
+        if (e && e.message === CANCELLED) throw e;
+        checkCancel();
+        failed.push({ file: u.file, title: u.title, error: e.message });
+      }
+    }
+  } finally { saveRecords(); }
+  report('Готово', 1);
+  return { updated: done.map(u => ({ file: u.newFile, title: u.title, from: u.from, to: u.to })), failed };
+}
+
+/* ---------- обновление сборки ---------- */
+const normName = s => String(s || '').toLowerCase().replace(/[^a-z0-9а-яё]+/g, '');
+const sameVersion = (v, cur) => !!cur && (v.id === cur.versionId || v.id === cur.fileId || v.number === cur.version || v.name === cur.version);
+
+/* Откуда взята сборка. Для экземпляров, установленных старыми версиями лаунчера, источник ищется по названию,
+   но принимается только точное совпадение названия и известной версии. */
+async function resolvePackSource(inst) {
+  const p = inst.pack;
+  if (!p) return null;
+  if (p.source === 'curseforge' && p.cfId) return { source: 'curseforge', cfId: String(p.cfId) };
+  if (p.slug) return { source: 'modrinth', slug: p.slug };
+  const tryModrinth = async () => {
+    const q = new URLSearchParams({ query: p.name, facets: JSON.stringify([['project_type:modpack']]), limit: '8' });
+    const j = await fetchJson(`${URLS.modrinth}/search?${q}`);
+    for (const h of (j.hits || []).filter(x => normName(x.title) === normName(p.name))) {
+      const vs = await packVersions(h.slug).catch(() => []);
+      if (vs.some(v => sameVersion(v, p))) return { source: 'modrinth', slug: h.slug };
+    }
+    return null;
+  };
+  const tryCurse = async () => {
+    if (!hasCurseKey()) return null;
+    const r = await cfSearch({ query: p.name, kind: 'modpack', limit: 8 });
+    for (const h of r.items.filter(x => normName(x.title) === normName(p.name))) {
+      const vs = await cfPackVersions(h.cfId).catch(() => []);
+      if (vs.some(v => sameVersion(v, p))) return { source: 'curseforge', cfId: String(h.cfId) };
+    }
+    return null;
+  };
+  const order = p.source === 'curseforge' ? [tryCurse, tryModrinth] : [tryModrinth, tryCurse];
+  for (const t of order) { try { const r = await t(); if (r) return r; } catch { /* источник недоступен */ } }
+  return null;
+}
+
+async function packVersionList(src) {
+  const vs = src.source === 'curseforge' ? await cfPackVersions(src.cfId) : await packVersions(src.slug);
+  return vs.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+/* Есть ли новая версия сборки у экземпляра. versions: версии на выбор (текущая отмечена). */
+async function checkPackUpdate(instanceId) {
+  const inst = getInstance(instanceId);
+  if (!inst.pack) return { supported: false, reason: 'Этот экземпляр создан не из сборки.' };
+  const src = await resolvePackSource(inst);
+  if (!src) return { supported: false, reason: 'Не удалось определить, откуда установлена сборка (она поставлена из файла). Обновить её можно только установкой заново.' };
+  const vs = await packVersionList(src);
+  const cur = vs.find(v => sameVersion(v, inst.pack));
+  const newer = vs.filter(v => !cur || String(v.date) > String(cur.date));
+  const sameMc = newer.filter(v => !v.mc.length || v.mc.includes(inst.mc));
+  const pickBest = list => list.find(v => v.type === 'release') || list[0] || null;
+  const latest = pickBest(sameMc);
+  const mark = v => ({ id: v.id, name: v.name, number: v.number, type: v.type, mc: v.mc, loaders: v.loaders, date: v.date, current: !!cur && v.id === cur.id, sameMc: !v.mc.length || v.mc.includes(inst.mc) });
+  return {
+    supported: true, source: src.source, name: inst.pack.name, mc: inst.mc,
+    current: { version: inst.pack.version, found: !!cur },
+    latest: latest ? mark(latest) : null, available: !!latest,
+    otherMc: !latest && newer.length ? mark(pickBest(newer)) : null,        // есть только версии под другой Minecraft
+    versions: vs.slice(0, 30).map(mark)
+  };
+}
+
+/* удаляет файлы из списка и возвращает, сколько убрано */
+async function removeManaged(dir, list) {
+  let n = 0;
+  for (const rel of list) {
+    let full; try { full = packDest(dir, rel); } catch { continue; }
+    if (fs.existsSync(full)) { await fsp.rm(full, { force: true }).catch(() => {}); n++; }
+    else if (/\.jar$/i.test(full) && fs.existsSync(full + DIS)) { await fsp.rm(full + DIS, { force: true }).catch(() => {}); n++; }   // выключенный мод сборки
+  }
+  return n;
+}
+
+/* Две копии одного мода в mods = ошибка запуска: после обновления убираем старые версии модов, которые принесла новая сборка */
+function dedupeMods(modsDir, keep) {
+  const removed = [];
+  let names = []; try { names = fs.readdirSync(modsDir).filter(f => /\.jar$/i.test(f)); } catch { return removed; }
+  const idOf = f => { try { const full = path.join(modsDir, f); const m = readJar(full, fs.statSync(full)); return m.ids[0] || null; } catch { return null; } };
+  const owner = new Map();
+  for (const f of names) if (keep.has(f)) { const id = idOf(f); if (id) owner.set(id, f); }
+  for (const f of names) {
+    if (keep.has(f)) continue;
+    const id = idOf(f);
+    if (id && owner.has(id)) { try { fs.rmSync(path.join(modsDir, f), { force: true }); removed.push(f); } catch { /* занят */ } }
+  }
+  return removed;
+}
+
+/* Обновление сборки на месте: миры, скриншоты, options.txt и серверы остаются; моды и файлы сборки заменяются.
+   opts: { instanceId, versionId, backup }. При ошибке или отмене новые файлы убираются, экземпляр остаётся прежним. */
+async function updatePack({ instanceId, versionId, backup, backupSuffix }, report, onLog, onFile) {
+  const inst = getInstance(instanceId);
+  if (running.has(inst.id)) throw new Error('Сначала закройте игру');
+  if (!inst.pack) throw new Error('Этот экземпляр создан не из сборки');
+  report('Определяю источник сборки', 0.01);
+  const src = await resolvePackSource(inst);
+  if (!src) throw new Error('Не удалось определить, откуда установлена сборка');
+  const vs = await packVersionList(src);
+  const ver = versionId ? vs.find(v => v.id === String(versionId)) : null;
+  if (!ver) throw new Error('Выбранной версии сборки больше нет в каталоге');
+  checkCancel();
+
+  let backupName = null;
+  if (backup) {
+    const b = await copyInstance(inst.id, (t, p) => report(t, 0.02 + 0.18 * (p || 0)), { suffix: backupSuffix || 'до обновления' });
+    backupName = b.name;
+  }
+
+  const dir = instDir(inst.id), modsDir = path.join(dir, 'mods');
+  const added = [];
+  let file = null, pack, newManaged, skipped = [], newPack;
+  try {
+    // 1. файл новой версии
+    if (src.source === 'curseforge') {
+      const got = await fetchCfPackFile({ modId: src.cfId, fileId: ver.id }, (t, p) => report(t, 0.22));
+      file = got.file; pack = readCfPack(file);
+    } else {
+      const got = await fetchPackFile({ slug: src.slug, versionId: ver.id }, (t, p) => report(t, 0.22));
+      file = got.dest; pack = readMrpack(file);
+    }
+    const isCf = src.source === 'curseforge';
+    const refs = isCf ? (pack.man.files || []).filter(x => x.projectID && x.fileID && x.required !== false) : null;
+    const mrFiles = isCf ? null : mrpackFiles(pack);
+    report(`Версия ${ver.number}: Minecraft ${pack.mc}, ${LOADER_NAMES[pack.loader] || 'Vanilla'}`, 0.24);
+
+    // 2. игра и загрузчик, если новая версия сборки требует другие
+    let target = null;
+    if (pack.mc !== inst.mc || pack.loader !== inst.loader || (pack.loader !== 'vanilla' && pack.loaderVersion !== inst.loaderVersion)) {
+      await installVanillaJson(pack.mc);
+      const { versionId: vid, loaderVersion } = await installLoader(pack.mc, pack.loader, pack.loader === 'vanilla' ? null : pack.loaderVersion,
+        (t, p) => report(t, 0.24 + 0.2 * (p || 0)), onLog, true);
+      await ensureGame(vid, (t, p) => report(t, 0.24 + 0.2 * (p || 0)));
+      target = { mc: pack.mc, loader: pack.loader, loaderVersion, versionId: vid };
+    }
+    checkCancel();
+
+    // 3. файлы сборки
+    await fsp.mkdir(modsDir, { recursive: true });
+    if (isCf) {
+      const infos = new Map();
+      for (let i = 0; i < refs.length; i += 100) {
+        const j = await cfRequest('/mods/files', { body: { fileIds: refs.slice(i, i + 100).map(x => x.fileID) } });
+        for (const f of j.data || []) infos.set(f.id, f);
+      }
+      let n = 0;
+      newManaged = [];
+      await pool(refs, 4, async ref => {
+        const f = infos.get(ref.fileID);
+        try {
+          if (!f) throw new Error('файл не найден на CurseForge');
+          const url = cfFileUrl(f);
+          if (!CF_HOST(new URL(url).hostname)) throw new Error('неизвестный сервер');
+          const name = path.basename(f.fileName), dest = path.join(modsDir, name), existed = fs.existsSync(dest);
+          if (onFile) onFile({ file: name, received: 0, total: f.fileLength || 0 });
+          await download(url, dest, { sha1: cfSha1(f), onProgress: (g, t) => onFile && onFile({ file: name, received: g, total: t || f.fileLength || 0 }) });
+          if (onFile) onFile({ file: name, received: 1, total: 1, done: true });
+          if (!existed) added.push(dest);
+          newManaged.push('mods/' + name);
+        } catch (e) {
+          if (e && e.message === CANCELLED) throw e;
+          skipped.push({ projectId: ref.projectID, fileId: ref.fileID, name: f ? f.fileName : null, error: e.message });
+        }
+        n++; report(`Скачано модов: ${n} из ${refs.length}`, 0.45 + 0.45 * n / refs.length);
+      });
+    } else {
+      await downloadMrpackFiles(mrFiles, dir, { report, onFile, from: 0.45, span: 0.45, added });
+      newManaged = mrFiles.map(f => f.path);
+    }
+    checkCancel();
+
+    // 4. всё скачано: убираем лишнее и применяем настройки сборки
+    report('Применяю обновление', 0.92);
+    const oldManaged = Array.isArray(inst.pack.managed) ? inst.pack.managed : [];
+    const keepNew = new Set(newManaged.map(x => x.replace(/\\/g, '/')));
+    const removed = await removeManaged(dir, oldManaged.filter(x => !keepNew.has(String(x).replace(/\\/g, '/'))));
+    const keepMods = new Set(newManaged.filter(x => /^mods\/[^/]+$/i.test(x)).map(x => x.slice(5)));
+    const dups = dedupeMods(modsDir, keepMods);
+    if (isCf) await applyOverrides(pack.zip, [pack.overrides.replace(/\/+$/, '') + '/'], dir, { keepUser: true });
+    else await applyMrpackOverrides(pack, dir, { keepUser: true });
+
+    const all = loadInstances(); const rec = all.find(i => i.id === inst.id);
+    if (target) Object.assign(rec, target);
+    newPack = isCf
+      ? { name: pack.name, version: String(pack.man.version || ver.number || ''), files: newManaged.length, source: 'curseforge', cfId: src.cfId, fileId: String(ver.id), managed: newManaged }
+      : { name: pack.name, version: String(pack.index.versionId || ver.number || ''), files: newManaged.length, source: 'modrinth', slug: src.slug, versionId: String(ver.id), managed: newManaged };
+    rec.pack = newPack;
+    rec.mods = (rec.mods || []).filter(m => fs.existsSync(path.join(modsDir, m.file)) || fs.existsSync(path.join(modsDir, m.file + DIS)));
+    saveInstances(all);
+    report('Сборка обновлена', 1);
+    return { id: inst.id, name: rec.name, from: inst.pack.version, to: newPack.version, files: newManaged.length, removed: removed + dups.length, skipped, backup: backupName, mcChanged: !!(target && target.mc !== inst.mc), oldTracking: !oldManaged.length };
+  } catch (e) {
+    for (const f of added) await fsp.rm(f, { force: true }).catch(() => {});
+    throw e;
+  } finally {
+    if (file) dropTempPack(file);
+  }
+}
+
+/* ---------- копия экземпляра ----------
+   Копируется всё: моды, миры, настройки, скриншоты, сборка. Журналы и отчёты о падении не нужны. */
+const COPY_SKIP = new Set(['logs', 'crash-reports']);
+async function copyInstance(id, report, opts = {}) {
+  const suffix = String(opts.suffix || 'копия').replace(/[()<>:"/\\|?*\u0000-\u001f]/g, '').trim().slice(0, 20) || 'копия';
+  const inst = getInstance(id);
+  if (running.has(id)) throw new Error('Сначала закройте игру: файлы мира и настроек сейчас используются');
+  const taken = new Set(loadInstances().map(i => i.name));
+  const baseName = inst.name.replace(new RegExp(`\\s*\\(${suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}( \\d+)?\\)$`), '') || inst.name;   // копия копии: «Мир (копия)», а не «Мир (копия) (копия)»
+  const mk = n => { const tail = ` (${suffix}${n > 1 ? ' ' + n : ''})`; return baseName.slice(0, Math.max(1, 40 - tail.length)).trimEnd() + tail; };
+  let n = 1, title = mk(n);
+  while (taken.has(title)) title = mk(++n);
+  const newId = uniqueInstanceId(title);
+  const src = instDir(id), dst = instDir(newId);
+
+  const items = []; let total = 0;
+  async function walk(rel) {
+    for (const d of await fsp.readdir(path.join(src, rel), { withFileTypes: true })) {
+      const r = rel ? rel + '/' + d.name : d.name;
+      if (!rel && COPY_SKIP.has(d.name)) continue;
+      if (d.isDirectory()) { items.push({ dir: r }); await walk(r); }
+      else if (d.isFile() && !/\.part$/i.test(d.name)) { const st = await fsp.stat(path.join(src, r)); items.push({ file: r, size: st.size, at: st.atime, mt: st.mtime }); total += st.size; }
+    }
+  }
+  try {
+    report('Считаю файлы', 0);
+    await fsp.mkdir(dst, { recursive: true });
+    await walk('');
+    let done = 0;
+    for (const it of items) {
+      checkCancel();
+      if (it.dir) { await fsp.mkdir(path.join(dst, it.dir), { recursive: true }); continue; }
+      await fsp.copyFile(path.join(src, it.file), path.join(dst, it.file));
+      await fsp.utimes(path.join(dst, it.file), it.at, it.mt).catch(() => {});   // дата файла сохраняется: по ней выбираются свежие скриншоты
+      done += it.size;
+      report(`Копирую: ${it.file.split('/').pop()}`, total ? done / total : 1);
+    }
+    const rec = JSON.parse(JSON.stringify(inst));
+    Object.assign(rec, { id: newId, name: title, created: new Date().toISOString() });
+    const all = loadInstances(); all.push(rec); saveInstances(all);
+    syncWatchers();
+    report('Готово', 1);
+    return rec;
+  } catch (e) {
+    if (!loadInstances().some(i => i.id === newId)) await fsp.rm(dst, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+}
+
 module.exports = {
-  installModFile,
+  checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
+  installModFile, installResource, installResourceFile, listResources,
   init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,
   loaderOptions, changeLoader, sysInfo, recommendRam, effectiveRam, maxRam, watchInstances, ensureAuthlib,
-  launch, isRunning, installMod, listMods, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,
+  launch, isRunning, installMod, listMods, toggleMod, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, javaCatalog, javaInstall, javaRemove, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,
   // для тестов
-  _t: { uniqueInstanceId, readCfPack, cfCard, cfFileUrl, cfPickFile, readMrpack, packDest, download, compareVer, forgeFor, neoforgeFor, fabricLikeFor, clampRam, countMods, lineFeeder, decodeBytes, ruleOk, mavenPath, resolveLibs, readVersion, buildCommand, expandArgs, sub, loadersFor, slugify, installFabricLike, resolveForgeLike }
+  _t: { cfFingerprint, dedupeMods, resolvePackSource, uniqueInstanceId, readCfPack, cfCard, cfFileUrl, cfPickFile, readMrpack, packDest, download, compareVer, forgeFor, neoforgeFor, fabricLikeFor, clampRam, countMods, lineFeeder, decodeBytes, ruleOk, mavenPath, resolveLibs, readVersion, buildCommand, expandArgs, sub, loadersFor, slugify, installFabricLike, resolveForgeLike }
 };

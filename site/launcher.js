@@ -13,6 +13,7 @@
   const S = {
     mcs: [], instances: [], versions: null, settings: {}, sys: null, logs: [], ms: null,
     sel: null, shots: [], shotsLoaded: false, dlg: null, timer: null, accTab: 'ely', lo: {}, heads: {}, sk: null,
+    modUpd: {}, packUpd: {}, packMsg: {},   // результаты проверки обновлений модов и сборки по id экземпляра
     starting: new Set()   // экземпляры, у которых игра запускается, но окно Minecraft ещё не появилось
   };
   try { S.sel = localStorage.getItem('modmatrix:sel'); } catch (e) { /* без хранилища */ }
@@ -149,9 +150,9 @@
   const DL = new Map();
   const fmtMb = b => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + ' МБ';
   /* крупные задачи (скачивание Minecraft, установка сборки): карточка справа живёт, пока идёт работа, и сообщает итог */
-  function taskStart(key, title, sub) {
+  function taskStart(key, title, sub, extra) {
     const old = DL.get(key); if (old) clearTimeout(old.t);
-    DL.set(key, { file: key, task: true, cancelable: true, title, sub, pct: null, status: 'Подготовка…' });
+    DL.set(key, { file: key, task: true, cancelable: true, title, sub, pct: null, status: 'Подготовка…', ...(extra || {}) });
     dlPaint();
   }
   function taskProgress(key, text, pct) {
@@ -178,8 +179,8 @@
   async function cancelTask(key) {
     const e = DL.get(key);
     if (!e || !e.task || e.done || e.error || e.cancelling) return;
-    const yes = await ask({ title: 'Отменить скачивание?', text: `«${e.title}» будет остановлено.\nУже скачанное для этого экземпляра и недоделанная установка удалятся.`,
-      ok: 'Да, отменить', cancel: 'Продолжить скачивание', danger: true });
+    const yes = await ask({ title: e.cancelTitle || 'Отменить скачивание?', text: `«${e.title}» будет остановлено.\n${e.cancelText || 'Уже скачанное для этого экземпляра и недоделанная установка удалятся.'}`,
+      ok: 'Да, отменить', cancel: e.cancelKeep || 'Продолжить скачивание', danger: true });
     if (!yes) return;
     const cur = DL.get(key);
     if (!cur || cur.done || cur.error) { note('Скачивание уже завершилось'); return; }
@@ -254,7 +255,7 @@
       if (p.text) pushLog(p.text);
       if (p.log) return;
       if (p.key === 'mod' && p.file) { dlUpdate(p); if (S.ofFile && p.file === S.ofFile) ofProgress(p); }
-      if (p.key === 'create') { setProgress('lcBar', 'lcStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
+      if (p.key === 'create') { if (!(S.packBusy && S.dlg && S.dlg.kind === 'settings')) setProgress('lcBar', 'lcStat', p.text, p.pct); setProgress('lcPackBar', 'lcPackStat', p.text, p.pct); setProgress('lcCopyBar', 'lcCopyStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
       else if (p.key === 'many') { setProgress('lcManyBar', 'lcManyStat', p.text, p.pct); taskProgress('task:mod', p.text, p.pct); }
       else if (p.key === 'mod') { setProgress('lcModBar', 'lcModStat', p.text, p.pct); if (p.text) taskProgress('task:mod', p.text, p.pct); }
       else if (p.key && p.key.startsWith('launch:')) setProgress('lcPlayBar', 'lcPlayStat', p.text, p.pct);
@@ -495,10 +496,12 @@
     d.addEventListener('submit', onDlgSubmit);
     d.addEventListener('input', onDlgInput);
     d.addEventListener('change', onDlgInput);
+    d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'lcModFilter') e.preventDefault(); });   // Enter в поиске не должен сохранять форму
     return d;
   }
   async function openDlg(kind, arg) {
     S.dlg = { kind, arg };
+    if (kind === 'settings') S.setTab = 'main';
     if (kind === 'create' && S.bgTask && S.bgTask.phase !== 'run') S.bgTask = null;   // прошлая установка закончена, чистая форма
     if (kind === 'settings' || kind === 'create') await reloadSys();   // актуальные сведения о ПК
     const d = ensureDlg();
@@ -572,6 +575,16 @@
       n2.textContent = rec ? `Для Minecraft ${mc} рекомендуется OptiFine ${ofName(rec)}.` : `Для Minecraft ${mc} доступно версий OptiFine: ${info.versions.length}.`;
     } catch (e) { const n2 = $id('lcNOfNote'); if (n2) n2.textContent = 'Не удалось получить список OptiFine: ' + e.message; const s2 = $id('lcNOfSel'); if (s2) s2.innerHTML = '<option value="">Нет данных</option>'; }
   }
+  function filterMods(q) {
+    q = String(q || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#lcMods .vrow').forEach(r => { const ok = !q || r.textContent.toLowerCase().includes(q); r.hidden = !ok; if (ok) shown++; });
+    let n = $id('lcModNone');
+    if (q && !shown && document.querySelector('#lcMods .vrow')) {
+      if (!n) { n = document.createElement('p'); n.id = 'lcModNone'; n.className = 'filter-note'; $id('lcMods').appendChild(n); }
+      n.textContent = 'Ничего не найдено.';
+    } else if (n) n.remove();
+  }
   function onDlgInput(e) {
     const id = e.target.id || '';
     if (id === 'lcMc') { const lo = S.lo.lcN; loadLoaders('lcN', e.target.value, lo && lo.loader ? { loader: lo.loader } : null); refreshNewOf(e.target.value); }
@@ -579,6 +592,7 @@
     else if (/^lc[NI](Auto|Range)$/.test(id)) updateRamHint(id.slice(0, 3));
     else if (id === 'lcManySel') { saveModTarget(e.target.value); refreshManyCompat(); }
     else if (id === 'lcOfSel') paintOptifineState();
+    else if (id === 'lcModFilter') filterMods(e.target.value);
     else if (e.target.name === 'skVar' && S.skViewer && S.skImgs) S.skViewer.update({ ...S.skImgs, slim: e.target.value === 'slim' });
   }
 
@@ -710,6 +724,17 @@
       <h4 class="sk-h crash-ai-h">Спросить у ИИ</h4>
       <div class="ai-links">${AI_LINKS.map(a => `<a class="ai-link" href="${a.url}" target="_blank" rel="noopener" data-act="crash-ai" data-ai="${a.id}">
         <span class="ai-ico ai-${a.id}"><img src="ai/${a.id}.png" alt="" width="28" height="28"></span><span>${a.name}</span></a>`).join('')}</div>`;
+  }
+  async function copyLog() {
+    const t = S.logs.join('\n');
+    if (!t) return false;
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch {
+      const el = $id('lcLog'); if (!el) return false;
+      const r = document.createRange(); r.selectNodeContents(el);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      try { return document.execCommand('copy'); } catch { return false; }
+    }
   }
   async function copyCrash() {
     const t = S.crash ? S.crash.text : '';
@@ -989,43 +1014,56 @@
       <p class="filter-note" id="lcStat">Скачиваются клиент игры, библиотеки, ресурсы, Java и загрузчик. Forge и NeoForge ставятся официальным установщиком, поэтому это занимает больше времени.</p>`;
   }
 
-  /* --- настройки экземпляра --- */
+  /* --- настройки экземпляра: вкладки слева, содержимое справа --- */
+  const SET_TABS = [
+    ['main', 'Основное', 'Название, память'],
+    ['look', 'Оформление', 'Аватарка и фон'],
+    ['loader', 'Загрузчик', 'Forge, Fabric, OptiFine'],
+    ['mods', 'Моды', 'Список и проверки'],
+    ['files', 'Файлы', 'Папки, копия, удаление'],
+  ];
   function settingsBody(i) {
-    return `
-      <form class="acc-form" id="lcInstForm" data-id="${esc(i.id)}">
-        <label class="field"><span>Название</span><input id="lcInstName" type="text" maxlength="40" value="${esc(i.name)}"></label>
-        <div class="specs">
-          <div class="spec"><span>Minecraft</span><b>${esc(i.mc)}</b></div>
-          <div class="spec"><span>Загрузчик</span><b>${esc(LD[i.loader] || i.loader)}${i.loaderVersion ? ' ' + esc(i.loaderVersion) : ''}</b></div>
-          <div class="spec"><span>Модов</span><b id="lcInstModCount">${i.modCount}</b></div>
-        </div>
-        <div class="lp-box">
-          <h4>Аватарка</h4>
-          <div class="ic-row">${instIcon(i, 'lg')}
-            <div class="lc-install">
-              <button class="btn" data-act="icon-pick" data-id="${esc(i.id)}" type="button">Добавить изображение…</button>
-              <button class="btn" data-act="icon-clear" data-id="${esc(i.id)}" type="button" ${i.iconUrl || i.iconPreset ? '' : 'disabled'}>Сбросить</button>
-            </div></div>
-          <div class="ic-presets">${PRESETS.map(x => `<button type="button" class="ic-p" aria-pressed="${i.iconPreset === x[0]}" data-act="icon-preset" data-id="${esc(i.id)}" data-p="${x[0]}" style="background:${x[1]}" title="${x[0]}">${x[2]}</button>`).join('')}</div>
-        </div>
-        <div class="lp-box">
-          <h4>Фон главной страницы</h4>
-          <div class="bg-modes" role="radiogroup" aria-label="Фон">
-            <label class="seg-opt"><input type="radio" name="lcIBg" value="screens" ${i.bgMode === 'screens' ? 'checked' : ''}><span>Скриншоты этого экземпляра</span></label>
-            <label class="seg-opt"><input type="radio" name="lcIBg" value="custom" ${i.bgMode === 'custom' ? 'checked' : ''} ${i.bgFile ? '' : 'disabled'}><span>Своё изображение</span></label>
-            <label class="seg-opt"><input type="radio" name="lcIBg" value="none" ${i.bgMode === 'none' ? 'checked' : ''}><span>Без изображения (цвет темы)</span></label>
-          </div>
+    const tab = SET_TABS.some(t => t[0] === S.setTab) ? S.setTab : 'main';
+    const pane = (id, html) => `<section class="set-pane" id="lcSet_${id}" role="tabpanel" ${id === tab ? '' : 'hidden'}>${html}</section>`;
+    const nav = SET_TABS.map(([id, t, sub]) => `<button type="button" class="set-tab" role="tab" data-act="set-tab" data-tab="${id}" aria-selected="${id === tab}">
+        <span class="st-t">${t}${id === 'mods' ? `<small id="lcSetModBadge">${i.modCount}</small>` : ''}</span><span class="st-s">${sub}</span></button>`).join('');
+
+    const main = `
+      <label class="field"><span>Название</span><input id="lcInstName" type="text" maxlength="40" value="${esc(i.name)}" autofocus></label>
+      <div class="specs">
+        <div class="spec"><span>Minecraft</span><b>${esc(i.mc)}</b></div>
+        <div class="spec"><span>Загрузчик</span><b>${esc(LD[i.loader] || i.loader)}${i.loaderVersion ? ' ' + esc(i.loaderVersion) : ''}</b></div>
+        <div class="spec"><span>Модов</span><b id="lcInstModCount">${i.modCount}</b></div>
+      </div>
+      ${ramControl('lcI', { auto: !!i.ramAuto, ram: i.ram, rec: i.ramRecommended })}`;
+
+    const look = `
+      <div class="lp-box">
+        <h4>Аватарка</h4>
+        <div class="ic-row">${instIcon(i, 'lg')}
           <div class="lc-install">
-            <button class="btn" data-act="bg-pick" data-id="${esc(i.id)}" type="button">${i.bgFile ? 'Заменить изображение…' : 'Добавить изображение…'}</button>
-            <button class="btn" data-act="bg-clear" data-id="${esc(i.id)}" type="button" ${i.bgFile ? '' : 'disabled'}>Убрать изображение</button>
-          </div>
-          <p class="filter-note">Скриншоты берутся только из папки этого экземпляра. Снимки из других установок на фон не попадут.</p>
-          <label class="field"><span>Смена скриншотов</span>
-            <select id="lcISlide">${[[4, 'каждые 4 секунды'], [7, 'каждые 7 секунд'], [15, 'каждые 15 секунд'], [30, 'каждые 30 секунд']].map(([v, t]) => `<option value="${v}" ${(i.slideSeconds || 7) === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+            <button class="btn" data-act="icon-pick" data-id="${esc(i.id)}" type="button">Добавить изображение…</button>
+            <button class="btn" data-act="icon-clear" data-id="${esc(i.id)}" type="button" ${i.iconUrl || i.iconPreset ? '' : 'disabled'}>Сбросить</button>
+          </div></div>
+        <div class="ic-presets">${PRESETS.map(x => `<button type="button" class="ic-p" aria-pressed="${i.iconPreset === x[0]}" data-act="icon-preset" data-id="${esc(i.id)}" data-p="${x[0]}" style="background:${x[1]}" title="${x[0]}">${x[2]}</button>`).join('')}</div>
+      </div>
+      <div class="lp-box">
+        <h4>Фон главной страницы</h4>
+        <div class="bg-modes" role="radiogroup" aria-label="Фон">
+          <label class="seg-opt"><input type="radio" name="lcIBg" value="screens" ${i.bgMode === 'screens' ? 'checked' : ''}><span>Скриншоты этого экземпляра</span></label>
+          <label class="seg-opt"><input type="radio" name="lcIBg" value="custom" ${i.bgMode === 'custom' ? 'checked' : ''} ${i.bgFile ? '' : 'disabled'}><span>Своё изображение</span></label>
+          <label class="seg-opt"><input type="radio" name="lcIBg" value="none" ${i.bgMode === 'none' ? 'checked' : ''}><span>Без изображения (цвет темы)</span></label>
         </div>
-        ${ramControl('lcI', { auto: !!i.ramAuto, ram: i.ram, rec: i.ramRecommended })}
-        <button class="btn primary" type="submit">Сохранить</button>
-      </form>
+        <div class="lc-install">
+          <button class="btn" data-act="bg-pick" data-id="${esc(i.id)}" type="button">${i.bgFile ? 'Заменить изображение…' : 'Добавить изображение…'}</button>
+          <button class="btn" data-act="bg-clear" data-id="${esc(i.id)}" type="button" ${i.bgFile ? '' : 'disabled'}>Убрать изображение</button>
+        </div>
+        <p class="filter-note">Скриншоты берутся только из папки этого экземпляра. Снимки из других установок на фон не попадут.</p>
+        <label class="field"><span>Смена скриншотов</span>
+          <select id="lcISlide">${[[4, 'каждые 4 секунды'], [7, 'каждые 7 секунд'], [15, 'каждые 15 секунд'], [30, 'каждые 30 секунд']].map(([v, t]) => `<option value="${v}" ${(i.slideSeconds || 7) === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      </div>`;
+
+    const loader = `
       <div class="lp-box">
         <h4>Загрузчик модов</h4>
         ${loaderPicker('lcI')}
@@ -1042,18 +1080,59 @@
         </div>
         <progress id="lcOfBar" max="100" value="0" hidden style="width:100%"></progress>
         <p class="filter-note" id="lcOfStat">Файл скачивается прямо в папку mods этого экземпляра.</p>
-      </div>
-      <div class="lc-install">
-        <button class="btn" data-act="folder" data-id="${esc(i.id)}" type="button">Папка игры</button>
-        <button class="btn" data-act="mods-folder" data-id="${esc(i.id)}" type="button">Папка модов</button>
-        <button class="btn" data-act="shots-folder" data-id="${esc(i.id)}" type="button">Папка скриншотов</button>
-      </div>
-      <div><h4>Моды в этой установке</h4>
+      </div>`;
+
+    const mods = `
+      ${i.pack ? `<div class="lp-box" id="lcPack" data-id="${esc(i.id)}"></div>` : ''}
+      <div class="lp-box">
+        <h4>Проверки</h4>
+        <div class="lc-install">
+          <button class="btn" data-act="compat-run" data-id="${esc(i.id)}" type="button">Проверить совместимость</button>
+          <button class="btn" data-act="mod-upd-check" data-id="${esc(i.id)}" type="button">Проверить обновления</button>
+        </div>
         <div class="cm-pre" id="lcCompat"></div>
-        <div class="lc-install"><button class="btn" data-act="compat-run" data-id="${esc(i.id)}" type="button">Проверить совместимость</button></div>
+        <div class="cm-pre" id="lcModUpd"></div>
+      </div>
+      <div class="lp-box">
+        <div class="mods-head"><h4>Установленные моды</h4>
+          <input type="search" id="lcModFilter" class="mods-filter" placeholder="Поиск по названию…" aria-label="Поиск по модам" autocomplete="off"></div>
         <div class="lc-mods" id="lcMods"><p class="filter-note">Загружаю…</p></div>
-        <p class="filter-note">Список обновляется сразу, если вы добавляете или удаляете файлы в папке модов. Чтобы поставить мод из каталога, откройте раздел «Моды» и нажмите «Установить в Minecraft».</p></div>
-      <div><button class="btn danger" data-act="del" data-id="${esc(i.id)}" type="button">Удалить установку</button></div>`;
+        <p class="filter-note">Список обновляется сразу, если вы добавляете или удаляете файлы в папке модов. Чтобы поставить мод из каталога, откройте раздел «Моды» и нажмите «Установить в Minecraft».</p>
+      </div>`;
+
+    const files = `
+      <div class="lp-box">
+        <h4>Папки</h4>
+        <div class="lc-install">
+          <button class="btn" data-act="folder" data-id="${esc(i.id)}" type="button">Папка игры</button>
+          <button class="btn" data-act="mods-folder" data-id="${esc(i.id)}" type="button">Папка модов</button>
+          <button class="btn" data-act="shots-folder" data-id="${esc(i.id)}" type="button">Папка скриншотов</button>
+        </div>
+      </div>
+      <div class="lp-box" id="lcCopy">
+        <h4>Копия экземпляра</h4>
+        <p class="filter-note">Создаёт новый экземпляр с теми же модами, настройками, мирами и скриншотами. Удобно, чтобы попробовать новые моды или обновление, не рискуя основной установкой. Игра должна быть закрыта.</p>
+        <div class="lc-install"><button class="btn" data-act="inst-copy" data-id="${esc(i.id)}" type="button" ${i.running ? 'disabled' : ''}>Создать копию</button></div>
+        <progress id="lcCopyBar" max="100" value="0" hidden style="width:100%"></progress>
+        <p class="filter-note" id="lcCopyStat" role="status"></p>
+      </div>
+      <div class="lp-box danger-zone">
+        <h4>Опасная зона</h4>
+        <p class="filter-note">Установка будет удалена вместе с её папкой. Это нельзя отменить.</p>
+        <div class="lc-install"><button class="btn danger" data-act="del" data-id="${esc(i.id)}" type="button">Удалить установку</button></div>
+      </div>`;
+
+    return `<form class="set-wrap" id="lcInstForm" data-id="${esc(i.id)}">
+      <nav class="set-nav" role="tablist" aria-orientation="vertical" aria-label="Разделы настроек">${nav}</nav>
+      <div class="set-panes">${pane('main', main)}${pane('look', look)}${pane('loader', loader)}${pane('mods', mods)}${pane('files', files)}</div>
+    </form>`;
+  }
+  const settingsFoot = '<div class="m-foot"><button class="btn" data-act="dclose" type="button">Закрыть</button><button class="btn primary" type="submit" form="lcInstForm">Сохранить</button></div>';
+  function showSetTab(tab) {
+    S.setTab = tab;
+    document.querySelectorAll('#lcDlg .set-tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+    document.querySelectorAll('#lcDlg .set-pane').forEach(p => { p.hidden = p.id !== 'lcSet_' + tab; });
+    const pn = $id('lcSet_' + tab); if (pn) pn.scrollTop = 0;
   }
 
 
@@ -1148,14 +1227,176 @@
     const box = $id('lcMods');
     if (!box) return;
     try {
-      const mods = await call('mod:list', id);
-      const cnt = $id('lcInstModCount'); if (cnt) cnt.textContent = mods.length;
+      const mods = await call('mod:all', id);
+      const nOn = mods.filter(m => m.enabled).length, nOff = mods.length - nOn;
+      const cnt = $id('lcInstModCount'); if (cnt) cnt.textContent = nOn;
+      const bdg = $id('lcSetModBadge'); if (bdg) bdg.textContent = nOn;
       box.innerHTML = mods.length
-        ? mods.map(m => `<div class="vrow"><span class="vn">${esc(m.title)}</span><span class="vm">${esc(m.file)}${m.dependency ? ' · зависимость' : ''}</span>
-            <button class="btn danger" style="margin-left:auto;padding:4px 10px" data-act="mod-del" data-id="${esc(id)}" data-file="${esc(m.file)}" type="button">Убрать</button></div>`).join('')
+        ? (nOff ? `<p class="filter-note">Выключено: <b>${nOff}</b>. <span>Они лежат в папке mods как «.jar.disabled» и в игру не загружаются.</span></p>` : '') +
+          mods.map(m => `<div class="vrow${m.enabled ? '' : ' mod-off'}"><label class="mod-sw" title="${m.enabled ? 'Выключить мод' : 'Включить мод'}">
+              <input type="checkbox" role="switch" class="mod-tgl" data-act="mod-toggle" data-id="${esc(id)}" data-file="${esc(m.file)}" ${m.enabled ? 'checked' : ''} aria-label="Включить или выключить мод ${esc(m.title)}"><span class="mod-sw-track" aria-hidden="true"></span></label>
+            <span class="vn">${esc(m.title)}</span><span class="vm">${esc(m.file)}${m.dependency ? ' · зависимость' : ''}${m.enabled ? '' : ' · выключен'}</span>
+            <button class="btn danger mod-del" data-act="mod-del" data-id="${esc(id)}" data-file="${esc(m.file)}" type="button">Удалить</button></div>`).join('')
         : '<p class="filter-note">Модов пока нет.</p>';
+      filterMods(($id('lcModFilter') || {}).value);
     } catch (e) { box.textContent = e.message; }
     runCompat(id);
+  }
+
+
+  /* ---------------- обновление модов ---------------- */
+  const CH_NAME = { release: '', beta: 'бета', alpha: 'альфа' };
+  function paintModUpd(id) {
+    const box = $id('lcModUpd');
+    if (!box || !S.dlg || S.dlg.arg !== id) return;
+    const r = S.modUpd[id];
+    if (!r) { box.innerHTML = ''; return; }
+    if (r === 'loading') { box.innerHTML = '<p class="filter-note">Ищу обновления для модов…</p>'; return; }
+    const errs = r.errors && r.errors.length ? `<p class="filter-note">Не все источники ответили: ${esc(r.errors.slice(0, 3).join('; '))}</p>` : '';
+    if (r.msg) { box.innerHTML = `<p class="filter-note">${esc(r.msg)}</p>`; return; }
+    if (!r.updates.length) {
+      box.innerHTML = `<p class="filter-note">${r.scanned ? `Все моды актуальны для Minecraft ${esc(r.mc)}. Найдено в каталогах Modrinth и CurseForge: ${r.tracked} из ${r.scanned}.` : 'В папке mods пока нет файлов.'}</p>${errs}`;
+      return;
+    }
+    box.innerHTML = `<p class="filter-note"><b>Есть обновления: ${r.updates.length}.</b> Версии подобраны под ваш экземпляр (Minecraft ${esc(r.mc)}, ${esc(LD[r.loader] || r.loader)}). Старый файл заменяется только после успешной загрузки нового.</p>
+      <div class="lc-mods">${r.updates.map(u => `<label class="vrow"><input type="checkbox" data-upd="${esc(u.file)}" checked>
+        <span class="vn">${esc(u.title)}</span><span class="vm">${esc(u.from)} → ${esc(u.to)}${CH_NAME[u.channel] ? ' · ' + CH_NAME[u.channel] : ''} · ${u.source === 'curseforge' ? 'CurseForge' : 'Modrinth'}</span></label>`).join('')}</div>
+      ${errs}
+      <div class="lc-install"><button class="btn primary" data-act="mod-upd-go" data-id="${esc(id)}" type="button">Обновить выбранные</button>
+        <button class="btn" data-act="mod-upd-go" data-all="1" data-id="${esc(id)}" type="button">Обновить все (${r.updates.length})</button></div>
+      <progress id="lcModBar" max="100" value="0" hidden style="width:100%"></progress>
+      <p class="filter-note" id="lcModStat" role="status"></p>`;
+  }
+  async function checkModUpd(id) {
+    const inst = S.instances.find(x => x.id === id);
+    if (inst && !(inst.loader && inst.loader !== 'vanilla')) { S.modUpd[id] = { msg: 'В этом экземпляре нет загрузчика модов, обновлять нечего.' }; paintModUpd(id); return; }
+    S.modUpd[id] = 'loading'; paintModUpd(id);
+    try { S.modUpd[id] = await call('mod:updates', id); }
+    catch (e) { S.modUpd[id] = { msg: e.message }; }
+    paintModUpd(id);
+  }
+  async function runModUpd(id, all) {
+    const r = S.modUpd[id];
+    if (!r || !r.updates) return;
+    const picked = all ? r.updates.map(u => u.file) : [...document.querySelectorAll('#lcModUpd input[data-upd]:checked')].map(x => x.dataset.upd);
+    if (!picked.length) { note('Отметьте моды, которые нужно обновить'); return; }
+    if (S.modBusy) { note('Обновление модов уже идёт'); return; }
+    const inst = S.instances.find(x => x.id === id);
+    if (inst && inst.running) { note('Сначала закройте игру'); return; }
+    S.modBusy = true;
+    taskStart('task:mod', `Обновление модов: ${picked.length}`, inst ? inst.name : '', { cancelTitle: 'Отменить обновление?', cancelText: 'Моды, которые уже обновились, останутся обновлёнными, остальные не изменятся.', cancelKeep: 'Продолжить' });
+    document.querySelectorAll('#lcModUpd button').forEach(x => { x.disabled = true; });
+    const st = $id('lcModStat'); if (st) st.textContent = 'Начинаю…';
+    try {
+      const res = await call('mod:update', { instanceId: id, files: picked });
+      taskEnd('task:mod', true, res.failed.length ? `Обновлено ${res.updated.length}, ошибок: ${res.failed.length}` : 'Готово');
+      note(res.failed.length ? `Обновлено ${res.updated.length}, ошибок: ${res.failed.length}` : `Обновлено модов: ${res.updated.length}`);
+      await reloadInstances(); if (onHome()) updateMeta();
+      S.modUpd[id] = null;
+      loadMods(id);
+      await checkModUpd(id);
+      if (res.failed.length) { const box = $id('lcModUpd'); if (box) box.insertAdjacentHTML('afterbegin', `<p class="filter-note"><b>Не обновились:</b></p>` + res.failed.map(f => `<div class="vrow"><span class="vn">${esc(f.title)}</span><span class="vm">${esc(f.error)}</span></div>`).join('')); }
+    } catch (ex) {
+      if (isCancel(ex)) { taskCancelled('task:mod'); note('Обновление модов остановлено'); }
+      else { taskEnd('task:mod', false, ex.message); note(ex.message); }
+      await reloadInstances(); S.modUpd[id] = null; loadMods(id); checkModUpd(id);
+    } finally { S.modBusy = false; }
+  }
+
+  /* ---------------- обновление сборки ---------------- */
+  const fmtDate = d => { try { return new Date(d).toLocaleDateString('ru-RU'); } catch { return ''; } };
+  function paintPackUpd(id) {
+    const box = $id('lcPack');
+    if (!box || box.dataset.id !== id) return;
+    const inst = S.instances.find(x => x.id === id);
+    if (!inst || !inst.pack) { box.hidden = true; return; }
+    const r = S.packUpd[id];
+    const m = S.packMsg[id];
+    const msgHtml = m ? `<p class="filter-note"><b>${esc(m.text)}</b></p>` + (m.skipped || []).slice(0, 20).map(x => `<div class="vrow"><span class="vn">${esc(x.name || ('проект ' + x.projectId))}</span><span class="vm">${esc(x.error)}</span></div>`).join('') : '';
+    const head = `<h4>Сборка: ${esc(inst.pack.name)}</h4>`;
+    const cur = `Установлена версия <b>${esc(inst.pack.version || '?')}</b>.`;
+    const recheck = `<div class="lc-install"><button class="btn" data-act="pack-check" data-id="${esc(id)}" type="button">Проверить обновление</button></div>`;
+    if (r === 'loading' || !r) { box.innerHTML = msgHtml + `${head}<p class="filter-note">${cur} Проверяю, нет ли новой версии…</p>`; return; }
+    if (r.err) { box.innerHTML = msgHtml + `${head}<p class="filter-note">${cur} ${esc(r.err)}</p>${recheck}`; return; }
+    if (!r.supported) { box.innerHTML = msgHtml + `${head}<p class="filter-note">${cur} ${esc(r.reason)}</p>`; return; }
+    const newer = r.versions.slice(0, Math.max(0, r.versions.findIndex(v => v.current) < 0 ? r.versions.length : r.versions.findIndex(v => v.current)));
+    if (!newer.length) { box.innerHTML = msgHtml + `${head}<p class="filter-note">${cur} Это последняя версия сборки.</p>${recheck}`; return; }
+    const def = r.latest ? r.latest.id : newer[0].id;
+    const note1 = r.available
+      ? `Доступна новая версия: <b>${esc(r.latest.number || r.latest.name)}</b> (${esc(fmtDate(r.latest.date))}).`
+      : `Для Minecraft ${esc(r.mc)} новых версий нет, но есть версии для другой версии игры. Переход на другой Minecraft может сломать миры, делайте его только с резервной копией.`;
+    box.innerHTML = msgHtml + `${head}<p class="filter-note">${cur} ${note1}</p>
+      <div class="lc-install">
+        <select id="lcPackVer" aria-label="Версия сборки">${newer.map(v => `<option value="${esc(v.id)}" ${v.id === def ? 'selected' : ''}>${esc(v.number || v.name)} · Minecraft ${esc(v.mc.slice(0, 3).join(', ') || '?')}${CH_NAME[v.type] ? ' · ' + CH_NAME[v.type] : ''} · ${esc(fmtDate(v.date))}${v.sameMc ? '' : ' · другой Minecraft'}</option>`).join('')}</select>
+        <button class="btn primary" id="lcPackGo" data-act="pack-upd-go" data-id="${esc(id)}" type="button">Обновить сборку</button>
+      </div>
+      <div class="checks"><label><input type="checkbox" id="lcPackBackup" checked> Сделать копию экземпляра перед обновлением</label></div>
+      <progress id="lcPackBar" max="100" value="0" hidden style="width:100%"></progress>
+      <p class="filter-note" id="lcPackStat" role="status">Миры, скриншоты, options.txt и список серверов не затрагиваются. Моды сборки заменяются новыми, свои моды остаются. Файлы настроек (config) от сборки перезаписываются.</p>`;
+  }
+  async function loadPackUpdate(id, force) {
+    if (!force && S.packUpd[id] && S.packUpd[id] !== 'loading') { paintPackUpd(id); return; }
+    S.packUpd[id] = 'loading'; paintPackUpd(id);
+    try { S.packUpd[id] = await call('pack:check', id); }
+    catch (e) { S.packUpd[id] = { err: e.message }; }
+    paintPackUpd(id);
+  }
+  async function runPackUpd(id) {
+    const sel = $id('lcPackVer'), r = S.packUpd[id];
+    const inst = S.instances.find(x => x.id === id);
+    if (!sel || !r || !inst) return;
+    if (S.packBusy || S.creating) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
+    if (inst.running) { note('Сначала закройте игру'); return; }
+    const v = r.versions.find(x => x.id === sel.value);
+    if (!v) return;
+    const backup = !!($id('lcPackBackup') && $id('lcPackBackup').checked);
+    const warn = v.sameMc ? '' : `\nВНИМАНИЕ: версия сборки рассчитана на другой Minecraft (${v.mc.slice(0, 3).join(', ')}). Миры могут перестать открываться.`;
+    if (!(await ask({ title: 'Обновить сборку?', text: `«${inst.name}»: ${r.current.version || '?'} → ${v.number || v.name}.\nМоды сборки будут заменены новыми, миры и настройки игрока останутся.${backup ? '\nПеред обновлением будет создана копия экземпляра.' : '\nКопия экземпляра создана не будет.'}${warn}`, ok: 'Обновить', danger: !v.sameMc }))) return;
+    S.packBusy = true; delete S.packMsg[id];
+    taskStart('task:create', `Обновление «${inst.name}»`, `сборка → ${v.number || v.name}`, { cancelTitle: 'Отменить обновление?', cancelText: 'Новые файлы будут убраны, экземпляр останется на прежней версии сборки.', cancelKeep: 'Продолжить обновление' });
+    document.querySelectorAll('#lcPack button, #lcPack select, #lcPack input').forEach(x => { x.disabled = true; });
+    const bar = $id('lcPackBar'); if (bar) { bar.hidden = false; bar.value = 0; }
+    try {
+      const res = await call('pack:update', { instanceId: id, versionId: v.id, backup, backupSuffix: window.I18N && I18N.lang() === 'en' ? 'before update' : 'до обновления' });
+      const skipped = res.skipped && res.skipped.length;
+      taskEnd('task:create', true, skipped ? `Обновлено, но не скачано модов: ${res.skipped.length}` : 'Сборка обновлена');
+      note(`Сборка обновлена до ${res.to || v.number}` + (res.backup ? `, копия «${res.backup}» сохранена` : ''));
+      S.packMsg[id] = { text: `Готово: версия ${res.to}, файлов сборки: ${res.files}, убрано устаревших: ${res.removed}.` + (res.backup ? ` Копия: «${res.backup}».` : '') + (res.oldTracking ? ' Сборка была установлена старой версией лаунчера, поэтому моды, которых нет в новой версии, могли остаться в папке mods.' : '') + (skipped ? ` Не скачано модов: ${res.skipped.length}. Авторы части модов запрещают скачивание сторонними лаунчерами, скачайте их вручную в папку mods.` : ''), skipped: res.skipped };
+      await reloadInstances(); S.shotsLoaded = false; S.packUpd[id] = null; S.modUpd[id] = null;
+      if (onHome()) render();
+      if (S.dlg && S.dlg.kind === 'settings' && S.dlg.arg === id) paintDlg();
+    } catch (ex) {
+      if (isCancel(ex)) { taskCancelled('task:create'); note('Обновление сборки отменено'); }
+      else { taskEnd('task:create', false, ex.message); note(ex.message); S.packMsg[id] = { text: 'Не удалось обновить: ' + ex.message }; }
+      await reloadInstances(); if (onHome()) render();
+      if (S.dlg && S.dlg.kind === 'settings' && S.dlg.arg === id) paintDlg();
+    } finally { S.packBusy = false; }
+  }
+
+  /* ---------------- копия экземпляра ---------------- */
+  async function runCopy(id) {
+    const inst = S.instances.find(x => x.id === id);
+    if (!inst) return;
+    if (inst.running) { note('Сначала закройте игру'); return; }
+    if (S.packBusy || S.creating) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
+    if (!(await ask({ title: 'Создать копию экземпляра?', text: `«${inst.name}» будет скопирован целиком: моды, настройки, миры и скриншоты. Для больших сборок и множества миров это может занять несколько минут и места на диске.`, ok: 'Создать копию' }))) return;
+    S.packBusy = true;
+    taskStart('task:create', `Копия «${inst.name}»`, 'копирование файлов', { cancelTitle: 'Отменить копирование?', cancelText: 'Недоделанная копия будет удалена, исходный экземпляр не изменится.', cancelKeep: 'Продолжить копирование' });
+    document.querySelectorAll('#lcCopy button').forEach(x => { x.disabled = true; });
+    const cb = $id('lcCopyBar'); if (cb) { cb.hidden = false; cb.value = 0; }
+    try {
+      const rec = await call('inst:copy', id, { suffix: window.I18N && I18N.lang() === 'en' ? 'copy' : 'копия' });
+      taskEnd('task:create', true, `Готово: «${rec.name}»`);
+      note(`Создана копия «${rec.name}»`);
+      await reloadInstances(); S.shotsLoaded = false;
+      if (onHome()) render();
+      if (S.dlg && S.dlg.kind === 'settings') paintDlg();
+    } catch (ex) {
+      if (isCancel(ex)) { taskCancelled('task:create'); note('Копирование отменено'); }
+      else { taskEnd('task:create', false, ex.message); note(ex.message); }
+      document.querySelectorAll('#lcCopy button').forEach(x => { x.disabled = false; });
+      const cb2 = $id('lcCopyBar'); if (cb2) cb2.hidden = true;
+    } finally { S.packBusy = false; }
   }
 
   /* ---------------- проверка совместимости ---------------- */
@@ -1242,8 +1483,8 @@
     } else if (k === 'settings') {
       const i = S.instances.find(x => x.id === S.dlg.arg);
       if (!i) { d.close(); return; }
-      d.innerHTML = head('Настройки экземпляра', i.name) + `<div class="m-body">${settingsBody(i)}</div>` + foot;
-      loadMods(i.id); updateRamHint('lcI'); loadOptifine(i.id);
+      d.innerHTML = head('Настройки экземпляра', i.name) + `<div class="m-body">${settingsBody(i)}</div>` + settingsFoot;
+      loadMods(i.id); updateRamHint('lcI'); loadOptifine(i.id); paintModUpd(i.id); if (i.pack) loadPackUpdate(i.id);
       loadLoaders('lcI', i.mc, { loader: i.loader, version: i.loaderVersion, installed: { loader: i.loader, version: i.loaderVersion || null } });
     } else if (k === 'many') {
       d.innerHTML = head('Установка избранного', S.dlg.arg.title) + `<div class="m-body">${manyBody()}</div>` + foot;
@@ -1262,7 +1503,7 @@
       d.innerHTML = head('Игра завершилась с ошибкой', `${c.name}${c.mc ? ' · ' + c.mc : ''}${c.loader && c.loader !== 'vanilla' ? ' · ' + c.loader : ''}`) + `<div class="m-body">${crashBody(c)}</div>` + foot;
       const el = $id('crashLog'); if (el) requestAnimationFrame(() => { el.scrollTop = 0; });
     } else if (k === 'log') {
-      d.innerHTML = head('Журнал', 'Сообщения лаунчера и игры') + '<div class="m-body"><pre class="lc-log" id="lcLog"></pre></div>' + foot;
+      d.innerHTML = head('Журнал', 'Сообщения лаунчера и игры') + '<div class="m-body"><pre class="lc-log" id="lcLog"></pre></div>' + '<div class="m-foot"><button class="btn primary" data-act="log-copy" type="button">Копировать лог</button><button class="btn" data-act="dclose" type="button">Закрыть</button></div>';
       const el = $id('lcLog'); el.textContent = S.logs.length ? S.logs.join('\n') + '\n' : 'Пока пусто.';
       if (S.logs.length) delete el.dataset.empty; else el.dataset.empty = '1';
       logToEnd();
@@ -1275,14 +1516,21 @@
     const id = b.dataset.id, act = b.dataset.act;
     try {
       if (act === 'dclose') $id('lcDlg').close();
+      else if (act === 'log-copy') note(await copyLog() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
       else if (act === 'crash-copy') note(await copyCrash() ? 'Отчёт скопирован' : 'Не удалось скопировать, выделите текст вручную');
       else if (act === 'crash-reveal') await call('crash:reveal');
       else if (act === 'crash-ai') { if (await copyCrash()) note('Отчёт скопирован'); return; }   // ссылка откроется сама
       else if (act === 'tab') { S.accTab = b.dataset.tab; paintDlg(); }
+      else if (act === 'set-tab') showSetTab(b.dataset.tab);
       else if (act === 'icon-pick') { const r = await call('inst:pickIcon', id); if (r) { await reloadInstances(); render(); paintDlg(); note('Аватарка обновлена'); } }
       else if (act === 'new') openDlg('create');
       else if (act === 'many-go') await manyGo(b);
       else if (act === 'compat-run') await runCompat(id);
+      else if (act === 'mod-upd-check') await checkModUpd(id);
+      else if (act === 'mod-upd-go') await runModUpd(id, b.dataset.all === '1');
+      else if (act === 'pack-check') await loadPackUpdate(id, true);
+      else if (act === 'pack-upd-go') await runPackUpd(id);
+      else if (act === 'inst-copy') await runCopy(id);
       else if (act === 'pack-file') installPackFile();
       else if (act === 'bg-pick') { const r = await call('inst:pickBg', id); if (r) { await reloadInstances(); S.shotsLoaded = false; render(); paintDlg(); note('Фон установлен'); } }
       else if (act === 'bg-clear') { await call('inst:clearBg', id); await reloadInstances(); S.shotsLoaded = false; render(); paintDlg(); }
@@ -1339,8 +1587,17 @@
       else if (act === 'folder') await call('inst:folder', { id });
       else if (act === 'mods-folder') await call('inst:folder', { id, sub: 'mods' });
       else if (act === 'shots-folder') await call('inst:folder', { id, sub: 'screenshots' });
+      else if (act === 'mod-toggle') {
+        const inst = S.instances.find(x => x.id === id);
+        if (inst && inst.running) { b.checked = !b.checked; note('Сначала закройте игру'); return; }
+        b.disabled = true;
+        try { await call('mod:toggle', { instanceId: id, file: b.dataset.file, enabled: b.checked }); }
+        catch (ex) { b.checked = !b.checked; throw ex; }
+        finally { b.disabled = false; }
+        await reloadInstances(); loadMods(id); updateMeta();
+      }
       else if (act === 'mod-del') {
-        if (!(await ask({ title: 'Убрать мод?', text: `Файл «${b.dataset.file}» будет удалён из папки mods.`, ok: 'Убрать', danger: true }))) return;
+        if (!(await ask({ title: 'Удалить мод?', text: `Файл «${b.dataset.file}» будет удалён из папки mods.`, ok: 'Удалить', danger: true }))) return;
         await call('mod:remove', { instanceId: id, file: b.dataset.file });
         await reloadInstances(); loadMods(id); updateMeta();
       } else if (act === 'del') {
@@ -1441,7 +1698,7 @@
       <label class="field"><span>В какой экземпляр установить</span>
         <select id="lcManySel">${usable.map(i => `<option value="${esc(i.id)}" ${i.id === last ? 'selected' : ''}>${esc(i.name)} · ${esc(i.mc)} · ${esc(LD[i.loader])}</option>`).join('')}</select></label>
       <p><b>${ok.length}</b> ${ok.length === 1 ? 'мод будет установлен' : 'модов будет установлено'} вместе с обязательными зависимостями. Версия каждого мода подбирается под игру и загрузчик выбранного экземпляра.</p>
-      ${skip.length ? `<p class="filter-note">Не будут установлены (${skip.length}): ${skip.map(m => esc(m.title)).join(', ')} Плагины и сборки так не ставятся, сборки устанавливаются из своей карточки.</p>` : ''}
+      ${skip.length ? `<p class="filter-note">Не будут установлены (${skip.length}): ${skip.map(m => esc(m.title)).join(', ')} Плагины, сборки, ресурспаки и шейдеры так не ставятся: сборки, ресурспаки и шейдеры устанавливаются из своей карточки.</p>` : ''}
       <div class="cm-pre" id="lcManyCompat"></div>
       <progress id="lcManyBar" max="100" value="0" hidden style="width:100%"></progress>
       <p class="filter-note" id="lcManyStat" role="status"></p>
@@ -1582,8 +1839,9 @@
     const old = $id('lcDlChoice'); if (old) old.remove();
     await reloadInstances();
     const ours = !!m && (m.source === 'modrinth' || m.source === 'curseforge');
-    const isMod = ours && m.kind === 'mod', isPack = ours && m.kind === 'modpack';
-    const usable = S.instances.filter(i => i.loader !== 'vanilla');
+    const isMod = ours && m.kind === 'mod', isPack = ours && m.kind === 'modpack', isRes = ours && RES_KIND[m.kind];
+    // ресурспаки и шейдеры не требуют загрузчика модов, подходит любой экземпляр
+    const usable = isRes ? S.instances.slice() : S.instances.filter(i => i.loader !== 'vanilla');
     const fits = i => !(v.gameList && v.gameList.length) || v.gameList.includes(i.mc);
     const ov = document.createElement('div'); ov.id = 'lcDlChoice'; ov.className = 'dlc-ov';
     ov.innerHTML = `<div class="dlc-box" role="dialog" aria-modal="true" aria-label="Способ скачивания">
@@ -1591,13 +1849,13 @@
       <p class="filter-note">${esc(m ? m.title : '')} · ${esc(v.game || '')}</p>
       <div class="dlc-actions">
         <button class="btn" type="button" data-dlc="normal">Скачать обычно</button>
-        <button class="btn primary" type="button" data-dlc="inst" ${(isMod || isPack) ? '' : 'disabled'}>${isPack ? 'Установить как экземпляр' : 'Установить в экземпляр'}</button>
+        <button class="btn primary" type="button" data-dlc="inst" ${(isMod || isPack || isRes) ? '' : 'disabled'}>${isPack ? 'Установить как экземпляр' : 'Установить в экземпляр'}</button>
       </div>
       <div class="dlc-pick" id="lcDlcPick" hidden>
         <select id="lcDlcSel" aria-label="Экземпляр">${usable.map(i => `<option value="${esc(i.id)}">${esc(i.name)} · ${esc(i.mc)} · ${esc(LD[i.loader])}${fits(i) ? ' ✓' : ''}</option>`).join('')}</select>
         <button class="btn primary" type="button" data-dlc="go">Установить</button>
       </div>
-      <p class="filter-note">${isMod ? (usable.length ? 'Файл попадёт в папку mods выбранного экземпляра. Зависимости этого мода нужно добавить самостоятельно.' : 'Нет экземпляров с загрузчиком модов, сначала создайте его на главной.') : isPack ? 'Будет создан новый экземпляр с модами этой сборки.' : 'Этот тип проекта ставится вручную, поэтому доступно только обычное скачивание.'}</p>
+      <p class="filter-note">${isRes ? (usable.length ? `Файл попадёт в папку ${m.kind === 'shader' ? 'shaderpacks' : 'resourcepacks'} выбранного экземпляра.` : 'Нет ни одного экземпляра, сначала создайте его на главной.') : isMod ? (usable.length ? 'Файл попадёт в папку mods выбранного экземпляра. Зависимости этого мода нужно добавить самостоятельно.' : 'Нет экземпляров с загрузчиком модов, сначала создайте его на главной.') : isPack ? 'Будет создан новый экземпляр с модами этой сборки.' : 'Этот тип проекта ставится вручную, поэтому доступно только обычное скачивание.'}</p>
       <button class="btn" type="button" data-dlc="close">Отмена</button>
     </div>`;
     modal.appendChild(ov);
@@ -1626,14 +1884,15 @@
         close(); saveModTarget(inst.id);
         let fname = '';
         try { fname = decodeURIComponent(new URL(v.file).pathname.split('/').pop() || ''); } catch (e) { /* имя возьмём из названия */ }
-        taskStart('task:mod', `Мод «${m.title}»`, 'установка');
+        taskStart('task:mod', `${isRes ? RES_WORD[m.kind] : 'Мод'} «${m.title}»`, 'установка');
         note(`Скачиваю «${m.title}» ${v.name}…`);
         try {
-          await call('mod:installFile', { instanceId: inst.id, url: v.file, filename: fname, title: m.title, slug: m.slug || String(m.id), version: v.name });
+          if (isRes) await call('res:installFile', { instanceId: inst.id, kind: m.kind, url: v.file, filename: fname, title: m.title, slug: m.cfId ? 'cf:' + m.cfId : (m.slug || String(m.id)), version: v.name });
+          else await call('mod:installFile', { instanceId: inst.id, url: v.file, filename: fname, title: m.title, slug: m.slug || String(m.id), version: v.name });
           taskEnd('task:mod', true, 'Готово');
           note(`«${m.title}» ${v.name} установлен в «${inst.name}»`);
           await reloadInstances(); if (onHome()) updateMeta();
-          postInstallCheck(inst.id);
+          if (!isRes) postInstallCheck(inst.id);
         } catch (err) {
           if (isCancel(err)) { taskCancelled('task:mod'); note(`Установка «${m.title}» отменена`); }
           else { taskEnd('task:mod', false, err.message); note(err.message); }
@@ -1642,11 +1901,96 @@
     });
   }
 
+  /* ---------------- ресурспаки и шейдеры ---------------- */
+  const RES_KIND = { resourcepack: true, shader: true };
+  const RES_WORD = { resourcepack: 'Ресурспак', shader: 'Шейдер' };
+  const SHADER_ENGINE_RE = /iris|oculus|optifine|canvas/i;
+
+  /* Блок «Установить в Minecraft» в карточке ресурспака или шейдера (loader не нужен, подходит любой экземпляр) */
+  async function decorateRes(m, body) {
+    const wrap = document.createElement('div');
+    wrap.id = 'lcModInstall';
+    body.insertBefore(wrap, body.firstChild);
+    const isShader = m.kind === 'shader';
+    const dirName = isShader ? 'shaderpacks' : 'resourcepacks';
+
+    await reloadInstances();
+    const list = S.instances;
+    if (!list.length) {
+      wrap.innerHTML = '<h4>Установить в Minecraft</h4><p class="filter-note">Нет ни одной установки. <button type="button" class="link" id="lcMiGo">Создать установку</button></p>';
+      $id('lcMiGo').onclick = () => { $id('modal').close(); setPage('home'); setTimeout(() => openDlg('create'), 60); };
+      return;
+    }
+    const last = modTarget(list);
+    const fits = i => (m.versions || []).includes(i.mc);
+    wrap.innerHTML = `
+      <h4>Установить в Minecraft</h4>
+      <div class="lc-install">
+        <select id="lcMiSel" aria-label="Установка">${list.map(i =>
+          `<option value="${esc(i.id)}" ${i.id === last ? 'selected' : ''}>${esc(i.name)} · ${esc(i.mc)} · ${esc(LD[i.loader])}${fits(i) ? ' ✓' : ''}</option>`).join('')}</select>
+        <button class="btn primary" id="lcMiBtn" type="button">Установить</button>
+      </div>
+      <div class="cm-pre" id="lcModCompat"></div>
+      <progress id="lcModBar" max="100" value="0" hidden style="width:100%"></progress>
+      <p class="filter-note" id="lcModStat">Файл скачается в папку ${dirName} выбранной установки. ${isShader ? 'Включить шейдер можно в игре: Настройки видео → Шейдеры.' : 'Включить ресурспак можно в игре: Настройки → Ресурспаки.'}</p>`;
+
+    // подсказка по выбранной установке: версия игры и, для шейдеров, есть ли движок (Iris, Oculus, OptiFine)
+    const precheck = async () => {
+      const sel = $id('lcMiSel'), box = $id('lcModCompat');
+      if (!sel || !box) return;
+      const inst = list.find(i => i.id === sel.value);
+      if (!inst) { box.innerHTML = ''; return; }
+      const warns = [];
+      if (!fits(inst) && (m.versions || []).length) warns.push(`${isShader ? 'Этот шейдер' : 'Этот ресурспак'} собран для Minecraft ${m.versions.slice(-1)[0]}, а в установке «${inst.name}» стоит ${inst.mc}. Автоподбор может не найти подходящую версию: тогда выберите нужный файл в списке версий ниже.`);
+      if (isShader) {
+        let mods = [];
+        try { mods = await call('mod:list', sel.value); } catch (e) { /* без списка */ }
+        if (!$id('lcMiSel') || $id('lcMiSel').value !== sel.value) return;
+        const hasEngine = mods.some(x => SHADER_ENGINE_RE.test(`${x.file} ${x.title} ${x.slug}`));
+        if (!hasEngine) warns.push(`Шейдер не заработает: в установке «${inst.name}» нет Iris, Oculus или OptiFine. Для Fabric, Quilt и NeoForge поставьте мод Iris из раздела «Моды», для Forge OptiFine ставится при создании экземпляра.`);
+      }
+      box.innerHTML = warns.map(t => `<p class="filter-note">⚠ ${esc(t)}</p>`).join('');
+    };
+    $id('lcMiSel').onchange = () => { saveModTarget($id('lcMiSel').value); precheck(); };
+    precheck();
+
+    $id('lcMiBtn').onclick = async () => {
+      const instanceId = $id('lcMiSel').value;
+      const inst = list.find(i => i.id === instanceId);
+      if (S.packBusy || S.creating) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
+      saveModTarget(instanceId);
+      const btn = $id('lcMiBtn'), selEl = $id('lcMiSel'), w = $id('lcModInstall');
+      btn.disabled = true; selEl.disabled = true;
+      taskStart('task:mod', `${RES_WORD[m.kind]} «${m.title}»`, 'установка');
+      const msg = document.createElement('div'); msg.className = 'bg-note'; msg.id = 'lcModNote';
+      msg.innerHTML = '<b>Скачивание началось</b><p>Окно можно закрыть, установка продолжится в фоне. Прогресс виден в плашке «Загрузки» справа.</p><button class="btn danger" data-act="task-cancel" data-key="task:mod" type="button">Отменить скачивание</button>';
+      if (w && !$id('lcModNote')) w.appendChild(msg);
+      note(`Скачиваю «${m.title}»…`);
+      try {
+        const done = await call('res:install', { instanceId, kind: m.kind, slug: m.slug, source: m.source, cfId: m.source === 'curseforge' ? cfIdOf(m) : undefined });
+        taskEnd('task:mod', true, 'Готово');
+        const same = done.length === 1 && done[0].cached;
+        note(same ? `«${m.title}» уже установлен, файл идентичен, повторно не скачивал` : `«${m.title}» установлен в «${inst ? inst.name : ''}»`);
+        const st = $id('lcModStat'); if (st) st.textContent = `Готово: файл лежит в папке ${dirName} установки «${inst ? inst.name : ''}».`;
+        await reloadInstances(); if (onHome()) updateMeta();
+      } catch (err) {
+        if (isCancel(err)) { taskCancelled('task:mod'); note(`Установка «${m.title}» отменена`); }
+        else { taskEnd('task:mod', false, err.message); note(err.message); const st = $id('lcModStat'); if (st) st.textContent = err.message; }
+      } finally {
+        const b2 = $id('lcMiBtn'), s2 = $id('lcMiSel'), n2 = $id('lcModNote');
+        if (b2) b2.disabled = false;
+        if (s2) s2.disabled = false;
+        if (n2) n2.remove();
+      }
+    };
+  }
+
   async function decorateModal(m) {
     const body = $id('mBody');
     const old = $id('lcModInstall'); if (old) old.remove();
     const ours = m && (m.source === 'modrinth' || m.source === 'curseforge');
     if (body && desktop && ours && m.kind === 'modpack') return decoratePack(m, body);
+    if (body && desktop && ours && RES_KIND[m.kind]) return decorateRes(m, body);
     if (!body || !desktop || !ours || m.kind !== 'mod') return;
     const wrap = document.createElement('div');
     wrap.id = 'lcModInstall';
@@ -1720,12 +2064,14 @@
 
   /* ---------------- запуск ---------------- */
   /* статус в Discord: сообщаем, на какой странице пользователь (сам статус собирает главный процесс) */
+  let viewing = null;   // открытая карточка мода, плагина или сборки
+  function setViewing(v) { viewing = v && v.title ? v : null; presence(); }
   function presence(page) {
     if (!desktop || typeof state === 'undefined') return;
     const i = cur();
-    mm.invoke('discord:page', { gv: (typeof catalog !== 'undefined' && catalog && catalog.kind === (page || state.page)) ? catalog.gv : '', page: page || state.page, inst: i ? { name: i.name, mc: i.mc, loader: i.loader, mods: i.modCount } : null, favs: typeof favorites !== 'undefined' ? favorites.size : 0 }).catch(() => {});
+    mm.invoke('discord:page', { gv: (typeof catalog !== 'undefined' && catalog && catalog.kind === (page || state.page)) ? catalog.gv : '', page: page || state.page, lang: window.I18N ? window.I18N.lang() : 'ru', inst: i ? { name: i.name, mc: i.mc, loader: i.loader, mods: i.modCount } : null, favs: typeof favorites !== 'undefined' ? favorites.size : 0, item: viewing ? { title: viewing.title, kind: viewing.kind, author: viewing.author } : null }).catch(() => {});
   }
-  window.LauncherUI = { presence, _task: { taskStart, taskProgress, taskEnd }, render, decorateModal, downloadChoice, isDesktop: desktop, installPackFile, installMany };
+  window.LauncherUI = { presence, setViewing, _task: { taskStart, taskProgress, taskEnd }, render, decorateModal, downloadChoice, isDesktop: desktop, installPackFile, installMany };
 
   let started = false;
   async function init() {

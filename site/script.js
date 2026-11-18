@@ -6,15 +6,19 @@
    ============================================================ */
 
 const LOADER_IDS = ["fabric","forge","neoforge","quilt"];
-const LOADER_LABEL = {fabric:"Fabric",forge:"Forge",neoforge:"NeoForge",quilt:"Quilt"};
+const LOADER_LABEL = {fabric:"Fabric",forge:"Forge",neoforge:"NeoForge",quilt:"Quilt", iris:"Iris",oculus:"Oculus",optifine:"OptiFine",canvas:"Canvas",vanilla:"Vanilla"};
+/* у шейдеров вместо загрузчика модов, движок, который их запускает */
+const SHADER_ENGINES = ["iris","oculus","optifine","canvas","vanilla"];
+const RES_KINDS = ["resourcepack","shader"];
 /* значок загрузчика (файлы лежат в site/loaders/<id>.png); если файла нет, просто пропадает */
-const ldIcon = l => LOADER_IDS.includes(l) ? `<img class="ld-ico" src="loaders/${l}.png" alt="" width="14" height="14" onerror="this.remove()">` : "";
+const ICON_IDS = [...LOADER_IDS, "iris","oculus","optifine"];
+const ldIcon = l => ICON_IDS.includes(l) ? `<img class="ld-ico" src="loaders/${l}.png" alt="" width="14" height="14" onerror="this.remove()">` : "";
 const CAT_LABEL = {
   adventure:"Приключения", decoration:"Декор", economy:"Экономика", equipment:"Снаряжение",
   food:"Еда", "game-mechanics":"Механики", library:"Библиотеки", magic:"Магия",
   management:"Управление", minigame:"Мини-игры", mobs:"Мобы", optimization:"Оптимизация",
   social:"Социальное", storage:"Хранение", technology:"Техника",
-  transportation:"Транспорт", utility:"Утилиты", worldgen:"Генерация мира"
+  transportation:"Транспорт", utility:"Утилиты", worldgen:"Генерация мира", cursed:"Странные"
 };
 const MODPACK_CAT_LABEL = {
   adventure:"Приключения", challenging:"Хардкор", combat:"Сражения", "kitchen-sink":"Всего понемногу",
@@ -26,6 +30,22 @@ const PLUGIN_CAT_LABEL = {
   gameplay:"Геймплей", games:"Мини-игры", protection:"Защита", role_playing:"Ролевые",
   world_management:"Управление миром", misc:"Разное"
 };
+const RESPACK_CAT_LABEL = {
+  "8x":"8x","16x":"16x","32x":"32x","64x":"64x","128x":"128x","256x":"256x","512x+":"512x+",
+  audio:"Звуки", blocks:"Блоки", combat:"Бой", "core-shaders":"Core-шейдеры", cursed:"Странные", decoration:"Декор",
+  entities:"Сущности", environment:"Окружение", equipment:"Снаряжение", fonts:"Шрифты", gui:"Интерфейс", items:"Предметы",
+  locale:"Локализация", modded:"Для модов", models:"Модели", realistic:"Реалистичные", simplistic:"Простые",
+  themed:"Тематические", tweaks:"Твики", utility:"Утилиты", "vanilla-like":"Ванильный стиль"
+};
+const SHADER_CAT_LABEL = {
+  cartoon:"Мультяшные", cursed:"Странные", fantasy:"Фэнтези", foliage:"Растительность", realistic:"Реалистичные",
+  "semi-realistic":"Полуреалистичные", "vanilla-like":"Ванильный стиль", atmosphere:"Атмосфера", bloom:"Свечение",
+  "colored-lighting":"Цветное освещение", "path-tracing":"Трассировка путей", pbr:"PBR", reflections:"Отражения",
+  potato:"Для слабых ПК", low:"Низкая нагрузка", medium:"Средняя нагрузка", high:"Высокая нагрузка", screenshot:"Для скриншотов"
+};
+/* название категории по слагу из любого каталога; неизвестный слаг показываем читаемо */
+const CAT_LABEL_ALL = {...PLUGIN_CAT_LABEL, ...MODPACK_CAT_LABEL, ...RESPACK_CAT_LABEL, ...SHADER_CAT_LABEL, ...CAT_LABEL};
+const catLabel = c => CAT_LABEL_ALL[c] || CF_RU[String(c).toLowerCase().replace(/[^a-z0-9]+/g,"")] || (/^[a-z0-9\-_+]+$/.test(String(c)) ? String(c).replace(/[-_]+/g," ").replace(/^./,x=>x.toUpperCase()) : String(c));
 const SOURCE_META = {
   modrinth: {label:"Modrinth"}, hangar: {label:"Hangar"},
   spiget: {label:"SpigotMC"}, curseforge: {label:"CurseForge"}, snapshot: {label:"Снимок"}
@@ -37,7 +57,8 @@ const Modrinth = {
   api:"https://api.modrinth.com/v2",
 
   async search({query, category, loader, gameVersion, sort, offset, limit, projectType, signal}){
-    const facets = [[`project_type:${projectType || "mod"}`]];
+    const ptype = projectType || "mod";
+    const facets = [[`project_type:${ptype}`]];
     if(category) facets.push([`categories:${category}`]);
     if(loader)   facets.push([`categories:${loader}`]);
     if(gameVersion) facets.push([`versions:${gameVersion}`]);
@@ -58,10 +79,11 @@ const Modrinth = {
       items: data.hits.map(h=>({
         id:`modrinth:${h.project_id}`, slug:h.slug, title:h.title, author:h.author,
         desc:h.description, icon:h.icon_url, cover:h.featured_gallery || (h.gallery||[])[0] || null, downloads:h.downloads, follows:h.follows,
-        categories:(h.display_categories||h.categories||[]).filter(c=>!LOADER_IDS.includes(c)),
-        loaders:(h.categories||[]).filter(c=>LOADER_IDS.includes(c)),
+        categories:(h.display_categories||h.categories||[]).filter(c=>!LOADER_IDS.includes(c) && !SHADER_ENGINES.includes(c) && c !== "minecraft"),
+        // у шейдеров в «загрузчиках» показываем движок (Iris, OptiFine…); у ресурспаков загрузчика нет
+        loaders:(h.categories||[]).filter(c=> ptype==="shader" ? SHADER_ENGINES.includes(c) : LOADER_IDS.includes(c)),
         versions:h.versions||[], updated:h.date_modified,
-        url:`https://modrinth.com/${(projectType||"mod")==="modpack"?"modpack":"mod"}/${h.slug}`,
+        url:`https://modrinth.com/${["modpack","resourcepack","shader"].includes(ptype) ? ptype : "mod"}/${h.slug}`,
         source:"modrinth"
       }))
     };
@@ -75,7 +97,7 @@ const Modrinth = {
       .then(list=> list.map(v=>({
         name:v.version_number, date:v.date_published,
         game:(v.game_versions||[]).join(", "),
-        gameList:v.game_versions||[], loaderList:v.loaders||[],
+        gameList:v.game_versions||[], loaderList:(v.loaders||[]).filter(l=> l!=="minecraft" && l!=="datapack"),
         file:(v.files||[]).find(f=>f.primary)?.url || (v.files||[])[0]?.url
       })));
     vp.catch(()=>{});
@@ -88,10 +110,23 @@ const Modrinth = {
         .sort((a,b)=> (b.featured?1:0)-(a.featured?1:0) || (a.ordering||0)-(b.ordering||0))
         .map(g=>({url:g.url, title:g.title||"", desc:g.description||""})),
       followers:p.followers, downloads:p.downloads,
-      gameVersions:p.game_versions||[], loaders:p.loaders||[],
+      gameVersions:p.game_versions||[], loaders:(p.loaders||[]).filter(l=> l!=="minecraft" && l!=="datapack"),
       links:{source:p.source_url, issues:p.issues_url, wiki:p.wiki_url},
       versions:[], versionsPromise: vp
     };
+  },
+
+  /* Категории проекта этого типа прямо из Modrinth (ресурспаки и шейдеры), чтобы не гадать со списком */
+  async categoryList(projectType, signal){
+    if(!this._cats){
+      const r = await fetch(`${this.api}/tag/category`, {signal});
+      if(!r.ok) throw new Error(`Modrinth ответил ${r.status}`);
+      this._cats = await r.json();
+    }
+    const names = this._cats.filter(c=> c.project_type === projectType).map(c=> c.name);
+    // разрешения (16x, 32x…) идут первыми и по возрастанию
+    const px = n=> /^\d+x\+?$/.test(n) ? parseInt(n,10) : null;
+    return names.sort((a,b)=>{ const x=px(a), y=px(b); return x!=null && y!=null ? x-y : x!=null ? -1 : y!=null ? 1 : 0; });
   },
 
   async gameVersions(signal){
@@ -113,7 +148,7 @@ const Hangar = {
   async search({query, sort, offset, limit, signal}){
     const sortField = sort === "updated" ? "-updated"
       : sort === "follows" ? "-stars"
-      : sort === "newest" ? "-created"
+      : sort === "newest" ? "-newest"
       : "-downloads";
     const p = new URLSearchParams({limit:String(limit||24), offset:String(offset||0), sort:sortField});
     if(query) p.set("q", query);
@@ -237,12 +272,30 @@ async function mmCall(channel, ...args){
    Названия ищем среди категорий CurseForge без учёта регистра и знаков; если соответствия нет, CurseForge в этой категории пропускается. */
 const CF_CAT_ALIAS = {
   adventure:["adventureandrpg","adventure"], decoration:["cosmetic","decoration"],
-  equipment:["armortoolsandweapons","equipment"], food:["food"], library:["libraryapi","library"],
+  equipment:["armortoolsandweapons","equipment"], food:["food"], library:["libraryapi","apiandlibrary","library"],
   magic:["magic"], mobs:["mobs"], optimization:["performance","optimization"], storage:["storage"],
   technology:["technology"], transportation:["playertransport","transport"], utility:["utilityqol","utility"],
   worldgen:["worldgen","worldgeneration"], "game-mechanics":["gamemechanics"], social:["social"],
-  economy:["economy"], management:["management"], minigame:["minigame","minigames"]
+  economy:["economy"], management:["management"], minigame:["minigame","minigames"],
+  // ресурспаки и шейдеры: слаги Modrinth -> названия категорий CurseForge
+  "8x-":["8x"], "8x":["8x"], "512x+":["512xandhigher","512x"],
+  realistic:["photorealistic","realistic"], "vanilla-like":["traditional","vanillalike","vanilla"],
+  simplistic:["modern","simplistic"], themed:["themed","medieval","steampunk"], modded:["modsupport","modded"],
+  fonts:["fontpacks","fonts"], cartoon:["cartoon","animated"], "semi-realistic":["semirealistic","realistic"],
+  fantasy:["fantasy"], cursed:["cursed"], tweaks:["tweaks","miscellaneous"]
 };
+/* Русские названия категорий CurseForge (ключ: название без регистра и знаков). Неизвестные остаются как есть. */
+const CF_RU = {
+  adventureandrpg:"Приключения и RPG", apiandlibrary:"Библиотеки и API", libraryapi:"Библиотеки и API", armortoolsandweapons:"Броня, инструменты, оружие",
+  cosmetic:"Косметика", education:"Обучение", food:"Еда", magic:"Магия", mapandinformation:"Карты и информация", miscellaneous:"Разное",
+  mobs:"Мобы", performance:"Производительность", redstone:"Редстоун", serverutility:"Серверные утилиты", storage:"Хранение", technology:"Техника",
+  utilityqol:"Утилиты", worldgen:"Генерация мира", playertransport:"Транспорт игрока", automation:"Автоматизация", energy:"Энергия",
+  energyfluidanditemtransport:"Энергия, жидкости, предметы", farming:"Фермерство", genetics:"Генетика", processing:"Обработка",
+  biomes:"Биомы", dimensions:"Измерения", oresandresources:"Руды и ресурсы", structures:"Структуры", minimap:"Миникарты", information:"Информация",
+  addons:"Дополнения", bugfixes:"Исправление ошибок", twitchintegration:"Интеграция с Twitch", cartography:"Картография", buildingandcrafting:"Строительство и крафт"
+};
+const cfNorm = t=> String(t||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+const cfRuName = n=> CF_RU[cfNorm(n)] || n;
 const cfCatCache = {};
 async function cfCategoryId(slug, kind){
   const normName = t=> String(t||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
@@ -254,7 +307,7 @@ async function cfCategoryId(slug, kind){
 const CurseForge = {
   name:"CurseForge",
   async search({query, category, loader, gameVersion, sort, offset, limit, projectType}){
-    const kind = projectType==="modpack" ? "modpack" : "mod";
+    const kind = ["modpack","resourcepack","shader"].includes(projectType) ? projectType : "mod";
     // из «Общего каталога» приходит слаг категории Modrinth; на странице CurseForge, уже числовой id
     if(category && !/^\d+$/.test(category)){
       category = await cfCategoryId(category, kind);
@@ -316,10 +369,12 @@ function mergeAll(rawItems){
       const ex = map.get(key);
       if(!ex.sources.includes(raw.source)) ex.sources.push(raw.source);
       ex.variants.push(raw);
+      const rank = Math.min(ex._rank ?? 0, raw._rank ?? 0);
       if(raw.downloads > ex.downloads){
         const {sources, variants} = ex;
         Object.assign(ex, raw, {sources, variants});
       }
+      ex._rank = rank;
     } else {
       map.set(key, {...raw, sources:[raw.source], variants:[raw]});
     }
@@ -332,7 +387,7 @@ function sortItems(list, sortKey){
     updated:(a,b)=>String(b.updated||"").localeCompare(String(a.updated||"")),
     newest:(a,b)=>String(b.updated||"").localeCompare(String(a.updated||"")),
     downloads:(a,b)=>(b.downloads||0)-(a.downloads||0),
-    relevance:(a,b)=>(b.downloads||0)-(a.downloads||0)
+    relevance:(a,b)=>(a._rank ?? 0)-(b._rank ?? 0)   // порядок выдачи площадок (по рангу в своём списке), иначе поиск по слову тонет в самых скачиваемых
   }[sortKey] || ((a,b)=>(b.downloads||0)-(a.downloads||0));
   return [...list].sort(cmp);
 }
@@ -353,6 +408,9 @@ function passesCategory(item, cat){
 function passesVersion(item, gv){
   if(!gv) return true;
   if(item.versions && item.versions.includes(gv)) return true;
+  // источник не сообщает версии (Hangar): карточку не прячем, как и в passesCategory
+  const anyVerData = (item.versions||[]).length || item.variants?.some(v=>(v.versions||[]).length);
+  if(!anyVerData) return true;
   // если у карточки объединены варианты из нескольких источников, проверяем версии в каждом из них
   if(item.variants?.some(v=>(v.versions||[]).includes(gv))) return true;
   return false;
@@ -364,14 +422,15 @@ async function fetchSources(keys, params){
   const only = keys.every(k=> k === "modmatrix");
   const isMain = k => only || k !== "modmatrix";
   const main = results.filter((r,i)=> isMain(keys[i]) && r.status==="fulfilled");
-  const raw = results.filter(r=>r.status==="fulfilled").flatMap(r=>r.value.items);
+  const raw = results.filter(r=>r.status==="fulfilled").flatMap(r=>r.value.items.map((it,i)=>{ it._rank = i; return it; }));
   const exhausted = main.every(r=> r.value.items.length < (params.limit||24));
   // все ответившие источники сообщили общее число, тогда известно и число страниц (по самому большому из них)
   const tots = main.map(r=>r.value.total);
   const known = tots.length > 0 && tots.every(t=> typeof t === "number");
   const total = known ? tots.reduce((a,b)=>a+b, 0) : null;
   const pageBase = known ? Math.max(...tots) : null;
-  const failed = keys.filter((k,i)=> results[i].status !== "fulfilled");
+  const failed = keys.map((k,i)=> results[i].status === "rejected" && results[i].reason?.name !== "AbortError"
+    ? {key:k, msg:String(results[i].reason?.message || results[i].reason)} : null).filter(Boolean);
   return {raw, exhausted, total, pageBase, anyOk: main.length>0, failed};
 }
 
@@ -691,7 +750,7 @@ function buildCard(m, onChange){
       <div class="tile">${tileHTML(m)}</div>
       <div>
         <h3>${hl(m.title, f.q)}</h3>
-        <div class="by">${m.author || "-"}${m.categories[0] ? " · " + (CAT_LABEL[m.categories[0]] || m.categories[0]) : ""}</div>
+        <div class="by">${m.author || "-"}${m.categories[0] ? " · " + catLabel(m.categories[0]) : ""}</div>
       </div>
     </div>
     <div class="badges">${badgesHTML(m)}</div>
@@ -712,7 +771,7 @@ function buildCard(m, onChange){
 }
 
 /* ---------- фильтры, выбранные в каталоге, применяются внутри карточек ---------- */
-const CATALOG_PAGES = ["mods","modpacks","plugins"];
+const CATALOG_PAGES = ["mods","modpacks","plugins","resourcepacks","shaders"];
 function activeFilters(){
   if(!catalog || !CATALOG_PAGES.includes(state.page)) return {gv:"", loader:"", q:""};
   return {gv:catalog.gv || "", loader:catalog.loader || "", q:catalog.q || ""};
@@ -839,6 +898,7 @@ async function openModal(m){
   $("mFav").textContent = favorites.has(m.id) ? "Убрать из избранного" : "В избранное";
   $("mBody").innerHTML = `<div class="badges">${badgesHTML(m)}</div><p id="mDesc">${m.desc || ""}</p><p style="color:var(--muted)">Загружаю подробности…</p>`;
   modal.showModal();
+  window.LauncherUI?.setViewing?.({ title: m.title, kind: m.kind || "mod", author: m.author });   // статус в Discord: какая карточка открыта
   if(m.desc) maybeTranslate($("mDesc"), m.desc);
 
   if(m.source === "snapshot"){
@@ -870,7 +930,9 @@ async function openModal(m){
         <div class="spec"><span>Загрузок</span><b>${nf.format(d.downloads || m.downloads || 0)}</b></div>
         <div class="spec"><span>Подписчиков</span><b>${nf.format(d.followers || 0)}</b></div>
         <div class="spec"><span>Лицензия</span><b>${d.license || "-"}</b></div>
-        <div class="spec ${(d.loaders||[]).length>1 ? "wide" : ""}"><span>Загрузчики</span><b class="ld-list">${(d.loaders||[]).map(l=>`<span class="ld-chip">${ldIcon(l)}${LOADER_LABEL[l]||l}</span>`).join("") || "-"}</b></div>
+        ${m.kind === "resourcepack"
+          ? `<div class="spec"><span>Разрешение</span><b>${(m.categories||[]).filter(c=>/^\d+x\+?$/.test(c)).join(", ") || "-"}</b></div>`
+          : `<div class="spec ${(d.loaders||[]).length>1 ? "wide" : ""}"><span>${m.kind === "shader" ? "Движки" : "Загрузчики"}</span><b class="ld-list">${(d.loaders||[]).map(l=>`<span class="ld-chip">${ldIcon(l)}${LOADER_LABEL[l]||l}</span>`).join("") || "-"}</b></div>`}
       </div>
       ${(d.gameVersions||[]).length ? `<div><h4>Версии игры</h4><p style="color:var(--muted);font-size:14.5px">${(activeFilters().gv ? d.gameVersions.filter(v=>v===activeFilters().gv) : d.gameVersions.slice(0,16)).join(", ") || "-"}</p></div>` : ""}
       <div id="mVersions"></div>
@@ -903,6 +965,7 @@ $("mFav").addEventListener("click", async ()=>{
   $("mFav").textContent = favorites.has(current.id) ? "Убрать из избранного" : "В избранное";
 });
 modal.addEventListener("click", e=>{ if(e.target === modal) modal.close(); });
+modal.addEventListener("close", ()=> window.LauncherUI?.setViewing?.(null));   // карточку закрыли, статус возвращается к странице
 
 /* ---------- инструкция по установке ---------- */
 
@@ -917,10 +980,18 @@ const CATALOG_DEF = {
     categories:CAT_LABEL, showLoaders:true, showSource:false, versionServerSide:true},
   modpacks: {title:"Сборки", lede:"Готовые сборки модов. Устанавливаются в лаунчер одной кнопкой.", keys:c=>[c.src||"modrinth"], projectType:"modpack", kind:"modpack", srcChoice:true,
     categories:MODPACK_CAT_LABEL, showLoaders:true, showSource:false, versionServerSide:true},
+  resourcepacks: {title:"Ресурспаки", lede:"Текстуры, звуки и шрифты с Modrinth и CurseForge в одном списке. Ресурспак ставится в папку resourcepacks выбранного экземпляра, загрузчик модов не нужен.",
+    keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
+    projectType:"resourcepack", kind:"resourcepack", allSources:true, dynamicCats:true,
+    categories:RESPACK_CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
+  shaders: {title:"Шейдеры", lede:"Шейдеры с Modrinth и CurseForge в одном списке. Ставятся в папку shaderpacks, а запускает их Iris (Fabric, Quilt, NeoForge), Oculus (Forge) или OptiFine (Forge).",
+    keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
+    projectType:"shader", kind:"shader", allSources:true, dynamicCats:true,
+    categories:SHADER_CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
   plugins:  {title:"Плагины", lede:"Плагины для серверов Paper и Spigot с Hangar и SpigotMC.", keys:(c)=> c.pluginSource==="both" ? ["hangar","spiget"] : [c.pluginSource], projectType:null, kind:"plugin",
     categories:PLUGIN_CAT_LABEL, showLoaders:false, showSource:true, versionServerSide:false}
 };
-const KIND_LABEL = {mod:"мода", modpack:"сборки", plugin:"плагина"};
+const KIND_LABEL = {mod:"мода", modpack:"сборки", plugin:"плагина", resourcepack:"ресурспака", shader:"шейдера"};
 
 let catalog = null;   // состояние текущей страницы каталога
 let catController = null;
@@ -1003,11 +1074,33 @@ function renderCatalogPage(kind, opts){
 
   const buildCats = async ()=>{
     const box = $("cats"); if(!box) return;
+    const tok = buildCats.tok = (buildCats.tok || 0) + 1;     // быстрые переключения источника: нужен только последний вызов
     box.innerHTML = `<span class="legend">Категория:</span>`;
     let list = Object.entries(def.categories).map(([v,label])=>({value:v,label}));
-    if(catalog.src === "curseforge"){
-      try{ list = (await mmCall("cf:categories", def.kind)).map(c=>({value:String(c.id), label:c.name})); }catch(e){ list = []; }
-      if(!$("cats") || catalog.src !== "curseforge") return;
+    if(def.dynamicCats){
+      try{
+        const names = await Modrinth.categoryList(def.projectType);
+        if(names.length) list = names.map(v=>({value:v,label:catLabel(v)}));
+      }catch(e){ /* остаётся запасной список */ }
+      if(!$("cats") || tok !== buildCats.tok) return;
+    }
+    const cfOnly = catalog.src === "curseforge" || (def.allSources && window.mm && catalog.allSource === "curseforge");
+    if(cfOnly){
+      try{ list = (await mmCall("cf:categories", def.kind)).map(c=>({value:String(c.id), label:cfRuName(c.name)})); }catch(e){ list = []; }
+      if(!$("cats") || tok !== buildCats.tok) return;
+      // за время ответа переключили источник: список уже не тот
+      if(!(catalog.src === "curseforge" || (def.allSources && catalog.allSource === "curseforge"))) return;
+    }
+    // «Общий каталог»: к категориям Modrinth добавляем категории CurseForge, которых у Modrinth нет (Редстоун, Биомы, Структуры…). Они ищут только на CurseForge.
+    if(!cfOnly && def.allSources && window.mm && catalog.allSource !== "modrinth"){
+      try{
+        const cf = await (cfCatCache[def.kind] ??= mmCall("cf:categories", def.kind).catch(()=>{ delete cfCatCache[def.kind]; return []; }));
+        if(!$("cats") || tok !== buildCats.tok) return;
+        const known = new Set(list.flatMap(c=> [cfNorm(c.value), ...(CF_CAT_ALIAS[c.value]||[])]));
+        const extra = cf.filter(c=> !known.has(cfNorm(c.name)) && !list.some(x=> cfRuName(c.name) === x.label))
+          .map(c=>({value:"cf:"+c.id, label:cfRuName(c.name), title:"Категория CurseForge: показываются только результаты с CurseForge"}));
+        list = list.concat(extra);
+      }catch(e){ /* без дополнительных категорий */ }
     }
     buildChips(box, [{value:"",label:"Все"}, ...list], "cat", def.showSource);
   };
@@ -1029,7 +1122,9 @@ function renderCatalogPage(kind, opts){
       b.addEventListener("click", ()=>{
         if(catalog.allSource === b.dataset.value) return;
         catalog.allSource = b.dataset.value;
+        catalog.cat = "";        // у Modrinth слаги, у CurseForge числовые id: выбранная категория другого источника не подходит
         $("allSrc").querySelectorAll(".chip").forEach(c=> c.setAttribute("aria-pressed", String(c===b)));
+        buildCats();
         loadCatalog();
       });
     });
@@ -1096,7 +1191,7 @@ function renderCatalogPage(kind, opts){
 function buildChips(container, values, key, clientOnly){
   values.forEach(v=>{
     const b = document.createElement("button");
-    b.className = "chip"; b.dataset.value = v.value;
+    b.className = "chip"; b.dataset.value = v.value; if(v.title) b.title = v.title;
     if(v.icon){ b.innerHTML = v.icon; b.appendChild(document.createTextNode(v.label)); } else b.textContent = v.label;
     b.setAttribute("aria-pressed", String(catalog[key] === v.value));
     b.addEventListener("click", ()=>{
@@ -1121,29 +1216,36 @@ async function loadCatalog({keepPage=false} = {}){
   $("pager").innerHTML = "";
   updateResetBtn();
 
-  const keys = def.keys(catalog);
+  const onlyCf = /^cf:/.test(catalog.cat || "");       // дополнительные категории CurseForge: ищем только там
+  const keys = onlyCf ? ["curseforge"] : def.keys(catalog);
   const params = {
-    query:catalog.q, category:catalog.cat, loader:catalog.loader, gameVersion:catalog.gv,
+    query:catalog.q, category:onlyCf ? catalog.cat.slice(3) : catalog.cat, loader:catalog.loader, gameVersion:catalog.gv,
     sort:catalog.sort, projectType:def.projectType, offset:catalog.offset, limit:PAGE_SIZE, signal
   };
   try{
-    const {raw, exhausted, total, pageBase, anyOk} = await fetchSources(keys, params);
-    if(!anyOk) throw new Error("источники недоступны");
+    const {raw, exhausted, total, pageBase, anyOk, failed} = await fetchSources(keys, params);
+    // пока ждали ответ, запрос уже сменился (новое слово, фильтр, страница): CurseForge не отменяется, и его старый ответ затёр бы свежий
+    if(signal.aborted) return;
+    if(!anyOk) throw new Error(failed.length ? failed.map(f=> `${f.key}: ${f.msg}`).join("; ") : "источники недоступны");
     raw.forEach(r=> r.kind = def.kind);
     catalog.rawAll = raw;
     catalog.exhausted = exhausted;
     catalog.total = total; catalog.pageBase = pageBase;
     catalog.offline = false;
-    hideBanner();
+    const srcName = {modrinth:"Modrinth", curseforge:"CurseForge", hangar:"Hangar", spiget:"SpigotMC"};
+    if(failed.length) showBanner(`<b>${failed.map(f=> srcName[f.key] || f.key).join(", ")} не ответил</b>Показаны результаты остальных источников.
+      <details><summary>Технические детали</summary>${failed.map(f=> `${srcName[f.key] || f.key}: ${f.msg}`.replace(/&/g,"&amp;").replace(/</g,"&lt;")).join("<br>")}</details>`);
+    else hideBanner();
     catalog.items = sortItems(mergeAll(raw).map(ensureShape), catalog.sort);
     renderCatalogGrid();
   }catch(err){
     if(err.name === "AbortError") return;
     catalog.offline = true;
-    catalog.items = SNAPSHOT.map(m=>({...ensureShape(m), kind:def.kind}));
+    const isRes = RES_KINDS.includes(def.kind);   // офлайн-снимок только про моды, ресурспаки и шейдеры в нём не показываем
+    catalog.items = isRes ? [] : SNAPSHOT.map(m=>({...ensureShape(m), kind:def.kind}));
     catalog.exhausted = true;
     renderCatalogGrid();
-    showBanner(`<b>Не получилось загрузить актуальные данные</b>Показан ограниченный офлайн-список без счётчиков. Попробуйте обновить страницу позже.
+    showBanner(`<b>Не получилось загрузить актуальные данные</b>${isRes ? "Проверьте подключение к интернету и попробуйте ещё раз." : "Показан ограниченный офлайн-список без счётчиков. Попробуйте обновить страницу позже."}
       <details><summary>Технические детали</summary>${keys.join(", ")}: ${err.message}</details>`);
   }
 }
@@ -1237,6 +1339,8 @@ const QUICK_ICONS = {
   mods:`<path d="M12 2.8 20.5 7.4v9.2L12 21.2 3.5 16.6V7.4z"/><path d="M3.5 7.4 12 12l8.5-4.6"/><path d="M12 12v9.2"/><path d="M7.7 5.1l8.5 4.6"/><path d="M6.6 11.4l2 1.1v2.2l-2-1.1z"/><path d="M15.4 13.6l2-1.1v2.2l-2 1.1z"/>`,
   plugins:`<path d="M10 3.5a2 2 0 0 1 4 0V6h3.5a1 1 0 0 1 1 1v3.5H21a2 2 0 0 1 0 4h-2.5V19a1 1 0 0 1-1 1H14v-2.5a2 2 0 0 0-4 0V20H6.5a1 1 0 0 1-1-1v-4.5H3a2 2 0 0 1 0-4h2.5V7a1 1 0 0 1 1-1H10z"/>`,
   modpacks:`<path d="M12 2.8 21 7.3 12 11.8 3 7.3z"/><path d="M3 11.6l9 4.5 9-4.5"/><path d="M3 15.9l9 4.5 9-4.5"/><path d="M8.2 7.3 12 9.2l3.8-1.9"/><path d="M12 11.8v4.3"/>`,
+  resourcepacks:`<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4.4-4-7.2-9-7.2z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>`,
+  shaders:`<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/>`,
   favorites:`<path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z"/><path d="M12 7.5l1 2.1 2.3.3-1.7 1.6.4 2.3-2-1.1-2 1.1.4-2.3-1.7-1.6 2.3-.3z"/><path d="M19 3v3M17.5 4.5h3"/>`
 };
 const FEATURES = [
@@ -1279,6 +1383,14 @@ function renderHome(){
       <button class="quick-card" data-page="modpacks">
         <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.modpacks}</svg></span>
         <span><b>Сборки</b><span>Готовые модпаки с Modrinth</span></span>
+      </button>
+      <button class="quick-card" data-page="resourcepacks">
+        <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.resourcepacks}</svg></span>
+        <span><b>Ресурспаки</b><span>Текстуры, звуки и шрифты</span></span>
+      </button>
+      <button class="quick-card" data-page="shaders">
+        <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.shaders}</svg></span>
+        <span><b>Шейдеры</b><span>Освещение, тени и вода как в кино</span></span>
       </button>
       <button class="quick-card" data-page="favorites">
         <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.favorites}</svg></span>
@@ -1511,7 +1623,7 @@ function renderSettingsPage(){
       </div>
       <div class="setting-card">
         <h3>Сортировка по умолчанию</h3>
-        <p>Применяется при открытии «Модов», «Плагинов» и «Сборок».</p>
+        <p>Применяется при открытии «Модов», «Плагинов», «Сборок», «Ресурспаков» и «Шейдеров».</p>
         <select id="defSort">
           <option value="downloads">По загрузкам</option>
           <option value="relevance">По релевантности</option>
@@ -1527,13 +1639,22 @@ function renderSettingsPage(){
       </div>
       ${window.mm ? `<div class="setting-card" id="stDiscord">
         <h3>Статус в Discord</h3>
-        <p>В профиле Discord видно, что вы делаете в лаунчере. В игре показываются режим (меню, одиночная игра, сервер), мир, биом и АФК.</p>
+        <p>В профиле Discord видно, что вы делаете в лаунчере. В игре показываются режим (главное меню, одиночная игра, сервер), местоположение, биом, погода, а на серверах ещё и число игроков онлайн.</p>
         <button type="button" class="dc-toggle" id="dcOn" role="switch" aria-checked="true" aria-describedby="dcStat">
           <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.3 5.4A17 17 0 0 0 15 4.1l-.2.4a15.6 15.6 0 0 1 3.9 1.9 14.7 14.7 0 0 0-13.4 0 15.6 15.6 0 0 1 3.9-1.9l-.2-.4a17 17 0 0 0-4.3 1.3C2.1 9.5 1.4 13.4 1.7 17.2a17.2 17.2 0 0 0 5.3 2.7l1.1-1.8a11 11 0 0 1-1.7-.8l.4-.3a12.3 12.3 0 0 0 10.4 0l.4.3c-.5.3-1.1.6-1.7.8l1.1 1.8a17.2 17.2 0 0 0 5.3-2.7c.4-4.4-.7-8.3-3-11.8zM8.7 14.9c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2zm6.6 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2z"/></svg></span>
           <span class="dc-txt"><b>Показывать статус в Discord</b><small id="dcStat">Загружаю…</small></span>
           <span class="dc-track" aria-hidden="true"><i></i></span>
         </button>
         <div class="upd-actions"><button type="button" class="btn" id="dcAdv">Расширенные настройки</button></div>
+      </div>` : ""}
+      ${window.mm ? `<div class="setting-card" id="stIntro">
+        <h3>Интро при запуске</h3>
+        <p>Короткая заставка с логотипом при открытии лаунчера. Её можно пропустить кликом или любой клавишей.</p>
+        <button type="button" class="dc-toggle" id="introOn" role="switch" aria-checked="true" aria-describedby="introStat">
+          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg></span>
+          <span class="dc-txt"><b>Показывать интро при запуске</b><small id="introStat">Загружаю…</small></span>
+          <span class="dc-track" aria-hidden="true"><i></i></span>
+        </button>
       </div>` : ""}
       ${window.mm ? `<div class="setting-card" id="stHide">
         <h3>Сворачивание лаунчера</h3>
@@ -1562,6 +1683,14 @@ function renderSettingsPage(){
         <div class="upd-actions">
           <button type="button" class="btn primary" id="jvBtn" disabled>Обновить Java</button>
         </div>
+        <details class="jv-more" id="jvMore">
+          <summary>Скачать другие версии Java</summary>
+          <p class="filter-note">Лаунчер сам докачивает нужную Java при запуске игры. Здесь можно заранее скачать любые версии, например Java 8 для старых сборок или Java 21 для новых.</p>
+          <div class="jv-pick" id="jvPick">Загружаю список…</div>
+          <div class="upd-actions">
+            <button type="button" class="btn" id="jvGet" disabled>Скачать выбранные</button>
+          </div>
+        </details>
       </div>` : ""}
       <div class="setting-card">
         <h3>Об источниках</h3>
@@ -1622,6 +1751,22 @@ function renderSettingsPage(){
     });
   }
 
+  if(window.mm && $("stIntro")){
+    const btn = $("introOn");
+    const isOn = ()=>{ try{ return localStorage.getItem("modmatrix:intro") !== "off"; }catch(e){ return true; } };
+    const paint = ()=>{
+      const on = isOn();
+      btn.setAttribute("aria-checked", String(on));
+      $("introStat").textContent = on ? "Включено · заставка показывается при каждом запуске." : "Выключено · лаунчер открывается сразу.";
+    };
+    paint();
+    btn.addEventListener("click", ()=>{
+      const want = !isOn();
+      try{ localStorage.setItem("modmatrix:intro", want ? "on" : "off"); }catch(e){}
+      paint(); toast(want ? "Интро включено" : "Интро выключено");
+    });
+  }
+
   if(window.mm && $("stHide")){
     const btn = $("hideOn"), win = mm.platform === "win32";
     const paint = st=>{
@@ -1655,11 +1800,21 @@ function renderSettingsPage(){
       $("jvStat").textContent = !list.length ? "Java ещё не скачана: она установится при первом запуске игры."
         : offline ? "Не удалось связаться с серверами Mojang, показаны установленные версии."
         : old ? `Доступны обновления: ${old}.` : "Установлены последние версии Java.";
-      $("jvList").innerHTML = list.map(x=>`<div class="jv-row"><b>Java ${esc(x.major || "?")}</b><span>${esc(x.installed || "версия неизвестна")}${x.latest && !x.upToDate ? ` → сборка ${esc(x.latest)}` : ""}</span><em class="${x.upToDate ? "ok" : x.latest ? "new" : ""}">${x.upToDate ? "актуальна" : x.latest ? "есть обновление" : ""}</em></div>`).join("");
+      $("jvList").innerHTML = list.map(x=>`<div class="jv-row"><b>Java ${esc(x.major || "?")}</b><span>${esc(x.installed || "версия неизвестна")}${x.latest && !x.upToDate ? ` → сборка ${esc(x.latest)}` : ""}</span><em class="${x.upToDate ? "ok" : x.latest ? "new" : ""}">${x.upToDate ? "актуальна" : x.latest ? "есть обновление" : ""}</em><button type="button" class="btn danger jv-del" data-comp="${esc(x.comp)}" data-major="${esc(x.major || "?")}"${J.busy || running ? " disabled" : ""}${running ? ' title="Закройте игру, чтобы удалить Java"' : ""}>Удалить</button></div>`).join("");
       $("jvBtn").disabled = J.busy || !list.length || running;
       $("jvBtn").title = running ? "Закройте игру, чтобы обновить Java" : "";
     };
     load();
+    $("jvList").addEventListener("click", async e=>{
+      const b = e.target.closest(".jv-del"); if(!b || b.disabled) return;
+      const ok = await UI.confirm({title:`Удалить Java ${b.dataset.major}?`, text:`Папка ${b.dataset.comp} будет удалена с диска.\nЕсли эта версия понадобится для запуска игры, лаунчер скачает её заново.`, ok:"Удалить", cancel:"Отмена", danger:true});
+      if(!ok || !$("stJava")) return;
+      J.busy = true; $("jvBtn").disabled = true; $("jvList").querySelectorAll(".jv-del").forEach(x=> x.disabled = true);
+      const r = await mm.invoke("java:remove", b.dataset.comp);
+      J.busy = false; if(!$("stJava")) return;
+      toast(r.ok ? `Java ${b.dataset.major} удалена` : r.error, r.ok ? 3000 : 5000);
+      load(); if(J.cat) loadCat();
+    });
     window.__jvOff = mm.on("progress", p=>{
       if(!$("stJava")){ window.__jvOff(); return; }
       if(p.key !== "java") return;
@@ -1675,7 +1830,38 @@ function renderSettingsPage(){
         const changed = r.data.reduce((n,x)=> n + x.changed, 0);
         toast(changed ? `Java обновлена (файлов заменено: ${changed})` : "Файлы Java проверены, все на месте и актуальны", 4000);
       }
-      load();
+      load(); loadCat();
+    });
+
+    /* выборочное скачивание: все рантаймы Mojang для этой системы */
+    const loadCat = async ()=>{
+      const box = $("jvPick"); if(!box) return;
+      const r = await mm.invoke("java:catalog");
+      if(!$("jvPick")) return;
+      if(!r.ok){ box.textContent = "Не удалось получить список версий Java. Проверьте подключение к интернету."; return; }
+      const {list, running} = r.data;
+      J.cat = list; J.running = running;
+      box.innerHTML = list.map(x=>`<label class="jv-opt${x.installed ? " is-on" : ""}"><input type="checkbox" value="${esc(x.comp)}"${x.installed ? " disabled" : ""}><b>Java ${esc(x.major || "?")}</b><span>${esc(x.comp)}${x.latest ? ` · ${esc(x.latest)}` : ""}</span><em class="${x.installed ? "ok" : ""}">${x.installed ? "установлена" : ""}</em></label>`).join("");
+      box.querySelectorAll("input").forEach(i=> i.addEventListener("change", syncGet));
+      syncGet();
+    };
+    const syncGet = ()=>{
+      const b = $("jvGet"); if(!b) return;
+      const n = $("jvPick").querySelectorAll("input:checked").length;
+      b.disabled = J.busy || !n;
+      b.textContent = n ? `Скачать выбранные (${n})` : "Скачать выбранные";
+    };
+    $("jvMore").addEventListener("toggle", ()=>{ if($("jvMore").open && !J.cat) loadCat(); });
+    $("jvGet").addEventListener("click", async ()=>{
+      const comps = [...$("jvPick").querySelectorAll("input:checked")].map(i=> i.value);
+      if(!comps.length) return;
+      J.busy = true; $("jvBtn").disabled = true; $("jvGet").disabled = true; $("jvBar").hidden = false; $("jvBar").value = 0;
+      const r = await mm.invoke("java:install", comps);
+      J.busy = false; if(!$("stJava")) return;
+      $("jvBar").hidden = true;
+      if(!r.ok){ toast(r.error, 5000); }
+      else toast(r.data.length ? `Скачано версий Java: ${r.data.length}` : "Выбранные версии уже установлены", 4000);
+      load(); loadCat();
     });
   }
 
@@ -1727,22 +1913,26 @@ function renderSettingsPage(){
 
 /* ---------- Discord: расширенные настройки статуса ---------- */
 const DC_OPTS = [
-  {g:"В игре", items:[
-    {k:"showHost",   t:"Адрес сервера",        d:"Показывать IP или домен сервера, на котором вы играете"},
-    {k:"showWorld",  t:"Название мира",        d:"Название одиночного мира"},
+  {g:"Местоположение в игре", items:[
+    {k:"showPlace",  t:"Местоположение",       d:"Верхний мир, Нижний мир, Край, пещеры, глубины, горы"},
     {k:"showBiome",  t:"Биом",                 d:"В каком биоме находится игрок"},
-    {k:"showPlace",  t:"Где находится",        d:"Пещеры, глубины, Нижний мир, Край, горы, океан"},
-    {k:"showAction", t:"Чем занят",            d:"По предмету в руке: добывает, рубит, сражается, рыбачит; полёт на элитрах, верховая езда"},
     {k:"showWeather",t:"Погода и время суток", d:"День или ночь, дождь, гроза"},
-    {k:"showHealth", t:"Здоровье",             d:"«Борется за жизнь», когда осталось мало здоровья"},
-    {k:"showEvents", t:"События",              d:"«Только что погиб» и «получил достижение» на пару минут"},
-    {k:"showAfk",    t:"АФК",                  d:"«Стоит АФК», если 2 минуты нет нажатий клавиш и мыши"},
-    {k:"showCoords", t:"Координаты",           d:"Добавить X Y Z к статусу (по умолчанию выключено)"}
+    {k:"showCoords", t:"Координаты",           d:"Добавить X Y Z к статусу (по умолчанию выключено)"},
+    {k:"showWorld",  t:"Название мира",        d:"Название одиночного мира"}
+  ]},
+  {g:"Многопользовательская игра", items:[
+    {k:"showHost",    t:"Сервер",              d:"Название сервера из списка серверов игры или его адрес"},
+    {k:"showPlayers", t:"Игроков онлайн",      d:"Сколько игроков сейчас на сервере: «(128 из 500)». Лаунчер запрашивает статус сервера так же, как список серверов игры"}
+  ]},
+  {g:"Состояние игрока", items:[
+    {k:"showAfk",    t:"АФК",                  d:"«Отсутствует (АФК)», если 2 минуты нет нажатий клавиш и мыши"},
+    {k:"showHealth", t:"Критическое состояние",d:"Метка, когда у персонажа осталось мало здоровья"},
+    {k:"showEvents", t:"События",              d:"«Персонаж погиб» и «Достижение получено» на пару минут"}
   ]},
   {g:"Общее", items:[
     {k:"showInstance", t:"Экземпляр",              d:"Название экземпляра и загрузчик в подсказке к иконке"},
     {k:"showTimer",    t:"Таймер",                 d:"Сколько времени вы играете"},
-    {k:"showLauncher", t:"Действия в лаунчере",    d:"Что вы делаете вне игры: каталоги, настройки, установка"}
+    {k:"showLauncher", t:"Действия в лаунчере",    d:"Что вы делаете вне игры: просмотр каталогов, настройки, установка"}
   ]}
 ];
 async function openDiscordOptions(){
@@ -1764,14 +1954,15 @@ async function openDiscordOptions(){
       <div class="dc-prev" id="dcPrev" aria-live="polite"></div>
       ${DC_OPTS.map(g=>`<div><h4 class="sk-h">${g.g}</h4><div class="dc-grid">${g.items.map(i=>`
         <label class="dc-row"><input type="checkbox" data-k="${i.k}" ${val(i.k) ? "checked" : ""}><span><b>${esc(i.t)}</b><small>${esc(i.d)}</small></span></label>`).join("")}</div></div>`).join("")}
-      <p class="filter-note">Мир, биом и занятие берутся из файлов сохранения одиночной игры, поэтому могут отставать на несколько минут (игра пишет их при автосохранении). На серверах доступны адрес, АФК и события.</p>
+      <p class="filter-note">Мир, биом и местоположение берутся из файлов сохранения одиночной игры, поэтому могут отставать на несколько минут (игра пишет их при автосохранении). На серверах игра не сообщает лаунчеру, где находится игрок, поэтому показываются название сервера, число игроков онлайн, АФК и события.</p>
     </div>
     <div class="m-foot"><button class="btn" data-close type="button">Закрыть</button></div>`;
   const prev = async ()=>{
     const p = await mm.invoke("discord:preview");
     if(!p.ok || !$("dcPrev")) return;
-    const card = (title, x)=>`<div class="dc-card"><small>${title}</small><b>${esc(x.details || "")}</b><span>${esc(x.state || "")}</span></div>`;
-    $("dcPrev").innerHTML = card("Одиночная игра", p.data.single) + card("Стоит АФК", p.data.afk) + card("Событие", p.data.event) + card("Сервер", p.data.server);
+    const of = window.I18N && window.I18N.lang() === "en" ? "of" : "из";
+    const card = (title, x)=>`<div class="dc-card"><small>${title}</small><b>${esc(x.details || "")}</b><span>${esc(x.state || "")}${x.party ? ` (${x.party[0]} ${of} ${x.party[1]})` : ""}</span></div>`;
+    $("dcPrev").innerHTML = card("Одиночная игра", p.data.single) + card("Нижний мир", p.data.nether) + card("АФК", p.data.afk) + card("Событие", p.data.event) + card("Сервер", p.data.server);
   };
   d.querySelectorAll("input[data-k]").forEach(c=> c.addEventListener("change", async ()=>{
     const r2 = await mm.invoke("settings:set", { discordOpts: { [c.dataset.k]: c.checked } });
@@ -1785,7 +1976,7 @@ async function openDiscordOptions(){
 /* ============================================================
    Навигация и каркас
    ============================================================ */
-const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", favorites:"Избранное", settings:"Настройки"};
+const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки"};
 
 function setPage(page, opts){
   state.page = page;

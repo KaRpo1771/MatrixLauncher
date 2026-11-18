@@ -1425,6 +1425,23 @@ dialog.lc-dlg[data-kind="crash"] .crash-log,dialog.lc-dlg[data-kind="crash"] .cr
 .jv-row span{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:12.5px}
 .jv-row em{margin-left:auto;font-style:normal;font-size:12px;color:var(--muted)}
 .jv-row em.ok{color:#4cc38a}.jv-row em.new{color:var(--accent)}
+.jv-row .jv-del{padding:3px 10px;font-size:12.5px;min-height:0}
+.jv-row .jv-del:disabled{opacity:.5;cursor:not-allowed}
+.jv-more{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.jv-more summary{cursor:pointer;font-weight:600;font-size:14px;list-style:none}
+.jv-more summary::-webkit-details-marker{display:none}
+.jv-more summary::before{content:"▸";display:inline-block;margin-right:8px;transition:transform .15s}
+.jv-more[open] summary::before{transform:rotate(90deg)}
+.jv-more .filter-note{margin:10px 0}
+.jv-pick{display:grid;gap:6px;margin:0 0 12px;font-size:13.5px;color:var(--muted)}
+.jv-opt{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text,inherit);cursor:pointer}
+.jv-opt:hover{border-color:var(--accent)}
+.jv-opt.is-on{opacity:.65;cursor:default}.jv-opt.is-on:hover{border-color:var(--line)}
+.jv-opt input{accent-color:var(--accent);margin:0}
+.jv-opt b{font-family:"Space Grotesk",sans-serif}
+.jv-opt span{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:12.5px}
+.jv-opt em{margin-left:auto;font-style:normal;font-size:12px;color:var(--muted)}
+.jv-opt em.ok{color:#4cc38a}
 .dc-opt{margin-top:10px}.dc-opt label{padding:8px 12px;border:1px solid var(--line-hard);border-radius:10px;background:var(--surface-2)}
 
 /* ---------- Discord: расширенные настройки ---------- */
@@ -1484,3 +1501,85 @@ progress[value="100"]::-webkit-progress-value{animation:none}
 @keyframes pg-slide{to{background-position:48px 0}}
 @media (prefers-reduced-motion:reduce){progress::-webkit-progress-value{animation:none;transition:none}}
 .upd-banner progress{width:110px}
+
+/* ============================================================
+   Интро при запуске (intro.js): стрела пробивает слово MatrixL, квадраты разлетаются по экрану, собираются в мозаику и раскрывают меню
+   ============================================================ */
+.intro{display:none}
+.intro-on .intro{display:block;position:fixed;inset:0;z-index:65;overflow:hidden;cursor:pointer;user-select:none;
+  background:
+    radial-gradient(700px 460px at 50% 48%,color-mix(in srgb,var(--accent) 16%,transparent),transparent 65%),
+    radial-gradient(600px 420px at 85% 110%,color-mix(in srgb,var(--accent-2) 14%,transparent),transparent 60%),
+    var(--bg-0);
+  transition:opacity .25s ease}
+.intro.intro-clear{background:transparent}
+.intro.intro-out{opacity:0;pointer-events:none}
+/* меню проявляется под рассыпающимися квадратами */
+.intro-reveal .shell{animation:intro-ui .7s cubic-bezier(.2,.7,.2,1) both}
+@keyframes intro-ui{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.intro-reveal .shell{animation:none}}
+.intro canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+/* ---------- скрываем полосу прокрутки страницы: прокрутку показывает полоска в верхней панели ---------- */
+html{scrollbar-width:none!important}
+html::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
+
+/* в верхней панели теперь 8 разделов: на окнах уже 1400 px пункты чуть плотнее, остальное уезжает в прокрутку */
+@media (max-width:1400px){
+  .topbar .nav{gap:2px}
+  .topbar .nav-item{padding:8px 9px}
+}
+
+/* ---------- настройки экземпляра: вкладки слева, содержимое справа ---------- */
+dialog.lc-dlg[data-kind="settings"]{width:min(920px,calc(100vw - 24px));max-width:none}
+dialog.lc-dlg[data-kind="settings"][open]{display:flex;flex-direction:column;height:min(720px,calc(100vh - 32px));max-height:none;overflow:hidden}
+dialog.lc-dlg[data-kind="settings"] .m-head{flex:none}
+dialog.lc-dlg[data-kind="settings"] .m-foot{flex:none;justify-content:flex-end;gap:12px}
+dialog.lc-dlg[data-kind="settings"] .m-body{flex:1;min-height:0;max-height:none;padding:0;overflow:hidden;display:block}
+.set-wrap{display:grid;grid-template-columns:208px minmax(0,1fr);height:100%;margin:0}
+.set-nav{display:flex;flex-direction:column;gap:6px;padding:14px 12px;border-right:1px solid var(--line);overflow-y:auto;background:color-mix(in srgb,var(--bg) 55%,var(--surface))}
+.set-tab{display:grid;gap:2px;text-align:left;padding:10px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted);font:inherit;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.set-tab:hover{background:color-mix(in srgb,var(--text) 7%,transparent);color:var(--text)}
+.set-tab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.set-tab[aria-selected="true"]{background:color-mix(in srgb,var(--accent) 14%,var(--surface-2));border-color:color-mix(in srgb,var(--accent) 55%,var(--line-hard));color:var(--text)}
+.set-tab .st-t{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px}
+.set-tab .st-t small{font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;background:color-mix(in srgb,var(--accent) 24%,transparent)}
+.set-tab .st-s{font-size:12px;line-height:1.3;opacity:.85}
+.set-panes{min-width:0;min-height:0;overflow:hidden}
+.set-pane{display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:16px;height:100%;padding:18px 20px 24px;overflow-y:auto;animation:setIn .18s ease-out}
+.set-pane[hidden]{display:none}
+@keyframes setIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* ряды кнопок: ровные промежутки, ничего не слипается */
+.set-pane .lc-install{gap:10px 12px}
+.set-pane .lp-box{gap:14px}
+.set-pane .cm-pre:empty{display:none}
+.set-pane .cm-pre{margin-top:0}
+.mods-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.mods-filter{flex:1 1 180px;max-width:280px;padding:8px 12px;border:1px solid var(--line-hard);border-radius:8px;background:var(--surface-2);color:var(--text);font:inherit;font-size:14px}
+.mods-filter:focus{outline:2px solid var(--accent);outline-offset:1px}
+.lc-mods .vrow{flex-wrap:nowrap;gap:12px;padding:8px 8px 8px 12px}
+.lc-mods .vrow[hidden]{display:none}
+.lc-mods .vrow .vn{flex:0 1 auto;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc-mods .vrow .vm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lc-mods .vrow .mod-del{flex:none;margin-left:auto;padding:5px 12px;font-size:13px}
+/* ползунок «мод включён / выключен» */
+.mod-sw{position:relative;flex:none;display:inline-block;width:38px;height:22px;cursor:pointer}
+.mod-sw input.mod-tgl{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0;cursor:pointer;z-index:1;border:0;background:none;box-shadow:none;transform:none}
+.mod-sw input.mod-tgl::after{display:none}
+.mod-sw-track{position:absolute;inset:0;border-radius:999px;background:var(--surface-2);border:1.5px solid var(--line-hard);transition:background .18s,border-color .18s,box-shadow .18s}
+.mod-sw-track::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--muted);transition:transform .2s cubic-bezier(.3,1.4,.5,1),background .18s}
+.mod-sw input.mod-tgl:checked+.mod-sw-track{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:var(--accent)}
+.mod-sw input.mod-tgl:checked+.mod-sw-track::after{transform:translateX(16px);background:#000}
+.mod-sw:hover .mod-sw-track{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent)}
+.mod-sw input.mod-tgl:focus-visible+.mod-sw-track{outline:2px solid var(--accent);outline-offset:2px}
+.mod-sw input.mod-tgl:disabled+.mod-sw-track{opacity:.5}
+.lc-mods .vrow.mod-off .vn,.lc-mods .vrow.mod-off .vm{opacity:.55;text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--muted) 60%,transparent)}
+.lc-mods .vrow.mod-off .vm{text-decoration:none}
+.danger-zone{border-color:color-mix(in srgb,var(--redstone) 55%,var(--line))}
+.danger-zone h4{color:var(--redstone)}
+@media (max-width:700px){
+  dialog.lc-dlg[data-kind="settings"][open]{height:calc(100vh - 16px)}
+  .set-wrap{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+  .set-nav{flex-direction:row;overflow-x:auto;overflow-y:hidden;border-right:0;border-bottom:1px solid var(--line);padding:10px 12px}
+  .set-tab{flex:none}.set-tab .st-s{display:none}
+}

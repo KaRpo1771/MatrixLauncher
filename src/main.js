@@ -14,6 +14,7 @@ try { CURSEFORGE_KEY = require('./curseforge-key') || CURSEFORGE_KEY; } catch { 
 let DISCORD_APP_ID = process.env.DISCORD_APP_ID || '';
 try { DISCORD_APP_ID = require('./discord-app') || DISCORD_APP_ID; } catch {}
 const { DiscordPresence } = require('./discord');
+const serverping = require('./serverping');
 
 // название продукта сменилось на MatrixL, данные (аккаунты, экземпляры) остаются в прежней папке
 app.setPath('userData', path.join(app.getPath('appData'), 'ModMatrix'));
@@ -39,41 +40,67 @@ function handle(channel, fn) {
 const rpc = new DiscordPresence();
 const startedAt = Date.now();
 const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
-/* Первая строка: что делает пользователь. Вторая: полезная подробность или ничего (пустую строку Discord не показывает). */
-const PAGE_TITLE = {
-  home: 'Главная', mods: 'Каталог модов', plugins: 'Каталог плагинов',
-  modpacks: 'Каталог сборок', favorites: 'Избранное', settings: 'Настройки'
+/* Первая строка: что делает пользователь. Вторая: полезная подробность или ничего (пустую строку Discord не показывает).
+   Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
+const PRES = {
+  ru: {
+    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера' },
+    viewing: { mod: 'Просмотр мода', plugin: 'Просмотр плагина', modpack: 'Просмотр сборки', resourcepack: 'Просмотр ресурспака', shader: 'Просмотр шейдера' }, author: a => `Автор: ${a}`,
+    tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра' },
+    inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
+    favs: n => `${n} ${plural(n, 'карточка', 'карточки', 'карточек')} в избранном`,
+    mods: n => `${n} ${plural(n, 'мод', 'мода', 'модов')}`
+  },
+  en: {
+    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher' },
+    viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader' }, author: a => `By ${a}`,
+    tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance' },
+    inLauncher: 'In MatrixL launcher', playing: v => `Playing Minecraft ${v}`.trim(),
+    favs: n => `${n} saved ${n === 1 ? 'card' : 'cards'}`,
+    mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`
+  }
 };
-const presence = { page: 'home', inst: null, favs: 0, gv: '', tasks: new Map(), playing: new Map() };
-const CATALOG_PAGES = new Set(['mods', 'plugins', 'modpacks']);
-const plural = (n, one, few, many) => { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? many : d === 1 ? one : (d >= 2 && d <= 4) ? few : many; };
+const PAGE_IDS = new Set(['home', 'mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'favorites', 'settings']);
+const presence = { page: 'home', item: null, inst: null, favs: 0, gv: '', lang: 'ru', tasks: new Map(), playing: new Map() };
+const CATALOG_PAGES = new Set(['mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders']);
+const ITEM_KINDS = ['mod', 'plugin', 'modpack', 'resourcepack', 'shader'];
+function plural(n, one, few, many) { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? many : d === 1 ? one : (d >= 2 && d <= 4) ? few : many; }
 function instLine(i) {
   if (!i) return undefined;
   return `${i.name} · ${i.mc}${i.loader && i.loader !== 'vanilla' ? ' ' + (LD_NAME[i.loader] || i.loader) : ''}`;
 }
 function applyPresence() {
+  const o = activity.resolveOpts(accounts.getSettings());
+  const lang = activity.langOf(presence.lang), P = PRES[lang];
+  const start = o.showTimer ? startedAt : 0;
   if (presence.playing.size) {
     const g = [...presence.playing.values()].pop();
-    const o = activity.resolveOpts(accounts.getSettings());
-    const d = g.live ? activity.describe(g.live, g.inst, o) : { details: `Играет в Minecraft ${g.mc}`, state: g.state };
-    rpc.set({ details: d.details, state: d.state || g.state, start: o.showTimer ? g.start : 0, largeText: d.largeText });
+    const d = g.live ? activity.describe(g.live, g.inst, o, Date.now(), lang) : { details: P.playing(g.mc), state: g.stateFor(lang) };
+    rpc.set({ details: d.details, state: d.state || g.stateFor(lang), start: o.showTimer ? g.start : 0, largeText: d.largeText, party: d.party });
   } else if (presence.tasks.size) {
-    rpc.set({ details: [...presence.tasks.values()].pop(), state: instLine(presence.inst), start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
-  } else if (!activity.resolveOpts(accounts.getSettings()).showLauncher) {
-    rpc.set({ details: 'В лаунчере MatrixL', start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
+    rpc.set({ details: P.tasks[[...presence.tasks.values()].pop()] || P.tasks.mods, state: instLine(presence.inst), start });
+  } else if (!o.showLauncher) {
+    rpc.set({ details: P.inLauncher, start });
   } else {
-    let details = PAGE_TITLE[presence.page] || PAGE_TITLE.home;
+    let details = P.pages[presence.page] || P.pages.home;
     let state;
-    // каталоги: одна строка «Каталог модов | 1.12.2», версия видна только если выбрана в фильтре
-    if (CATALOG_PAGES.has(presence.page)) { if (presence.gv) details += ` | ${presence.gv}`; }
+    if (presence.item) {
+      // открыта карточка мода, плагина, сборки, ресурспака или шейдера: «Просмотр мода: Sodium», ниже автор
+      const it = presence.item;
+      details = `${P.viewing[it.kind] || P.viewing.mod}: ${it.title}`;
+      state = it.author ? P.author(it.author) : undefined;
+    }
+    // каталоги: одна строка «Просмотр модов | 1.12.2», версия видна только если выбрана в фильтре
+    else if (CATALOG_PAGES.has(presence.page)) { if (presence.gv) details += ` | ${presence.gv}`; }
     else if (presence.page === 'home') state = instLine(presence.inst);
-    else if (presence.page === 'favorites' && presence.favs) state = `${presence.favs} ${plural(presence.favs, 'карточка', 'карточки', 'карточек')} в избранном`;
-    rpc.set({ details, state, start: activity.resolveOpts(accounts.getSettings()).showTimer ? startedAt : 0 });
+    else if (presence.page === 'favorites' && presence.favs) state = P.favs(presence.favs);
+    rpc.set({ details, state, start });
   }
 }
 let taskSeq = 0;
-function withTask(text, fn) {
-  const k = ++taskSeq; presence.tasks.set(k, text); applyPresence();
+/* kind: java | mc | pack | mods | optifine (название задачи подбирается по языку при каждой отрисовке статуса) */
+function withTask(kind, fn) {
+  const k = ++taskSeq; presence.tasks.set(k, kind); applyPresence();
   const done = () => { presence.tasks.delete(k); applyPresence(); };
   return Promise.resolve().then(fn).finally(done);
 }
@@ -149,14 +176,19 @@ function registerIpc() {
   /* предпросмотр статуса для окна расширенных настроек: два примера (одиночная игра и сервер) с текущими опциями */
   handle('discord:preview', () => {
     const o = activity.resolveOpts(accounts.getSettings());
-    const inst = { name: 'Мой экземпляр', mc: '1.20.1', loader: 'fabric' };
-    const world = { name: 'Новый мир', gamemode: 0, hardcore: false, dim: 'overworld', pos: [120, 28, -64], biome: 'minecraft:dripstone_caves', held: 'iron_pickaxe', health: 20, dayTime: 15000, raining: false, thundering: false, elytra: false, riding: false };
-    const ev = { text: 'Получил достижение «Каменный век»', until: Date.now() + 1e5 };
+    const lang = activity.langOf(presence.lang);
+    const ru = lang === 'ru';
+    const inst = { name: ru ? 'Мой экземпляр' : 'My instance', mc: '1.20.1', loader: 'fabric' };
+    const world = { name: ru ? 'Новый мир' : 'New World', gamemode: 0, hardcore: false, dim: 'overworld', pos: [120, 70, -64], biome: 'minecraft:forest', health: 20, dayTime: 3000, raining: false, thundering: false };
+    const nether = { ...world, dim: 'nether', biome: 'minecraft:crimson_forest' };
+    const ev = { type: 'advancement', name: ru ? 'Каменный век' : 'Stone Age', until: Date.now() + 1e5 };
+    const now = Date.now();
     return {
-      single: activity.describe({ mode: 'single', world, afk: false }, inst, o),
-      afk: activity.describe({ mode: 'single', world, afk: true }, inst, o),
-      event: activity.describe({ mode: 'single', world, afk: false, event: ev }, inst, o),
-      server: activity.describe({ mode: 'server', host: 'mc.example.net', afk: false }, inst, o),
+      single: activity.describe({ mode: 'single', world, afk: false }, inst, o, now, lang),
+      nether: activity.describe({ mode: 'single', world: nether, afk: false }, inst, o, now, lang),
+      afk: activity.describe({ mode: 'single', world, afk: true }, inst, o, now, lang),
+      event: activity.describe({ mode: 'single', world, afk: false, event: ev }, inst, o, now, lang),
+      server: activity.describe({ mode: 'server', host: 'mc.example.net', srv: { name: 'Example Network', online: 128, max: 500 }, afk: false }, inst, o, now, lang),
       timer: o.showTimer
     };
   });
@@ -167,9 +199,11 @@ function registerIpc() {
     return { ...r, discordBuiltIn: !!DISCORD_APP_ID, discordConnected: rpc.active };
   });
   // интерфейс сообщает, на какой странице пользователь
-  handle('discord:page', ({ page, inst, favs, gv } = {}) => {
+  handle('discord:page', ({ page, inst, favs, gv, lang, item } = {}) => {
+    presence.item = item && item.title ? { title: String(item.title).slice(0, 80), kind: ITEM_KINDS.includes(item.kind) ? item.kind : 'mod', author: item.author ? String(item.author).slice(0, 40) : '' } : null;
     presence.gv = gv ? String(gv).slice(0, 20) : '';
-    presence.page = PAGE_TITLE[page] ? page : 'home';
+    presence.lang = activity.langOf(lang);
+    presence.page = PAGE_IDS.has(page) ? page : 'home';
     presence.inst = inst && inst.name ? { name: String(inst.name).slice(0, 40), mc: String(inst.mc || ''), loader: String(inst.loader || '') } : null;
     presence.favs = Number(favs) || 0;
     applyPresence();
@@ -184,7 +218,19 @@ function registerIpc() {
   handle('java:update', async () => {
     const release = lock('java');
     try {
-      return await withTask('Обновляет Java', () => core.startJob(() => core.javaUpdate(
+      return await withTask('java', () => core.startJob(() => core.javaUpdate(
+        (text, pct) => send('progress', { key: 'java', text, pct }))));
+    } finally { release(); }
+  });
+  handle('java:catalog', () => core.javaCatalog());
+  handle('java:remove', async comp => {
+    const release = lock('java');
+    try { return await core.javaRemove(comp); } finally { release(); }
+  });
+  handle('java:install', async comps => {
+    const release = lock('java');
+    try {
+      return await withTask('java', () => core.startJob(() => core.javaInstall(comps,
         (text, pct) => send('progress', { key: 'java', text, pct }))));
     } finally { release(); }
   });
@@ -198,7 +244,7 @@ function registerIpc() {
     const key = 'create';
     const release = lock(key);
     try {
-      return await withTask('Устанавливает Minecraft', () => core.startJob(() => core.createInstance(opts || {},
+      return await withTask('mc', () => core.startJob(() => core.createInstance(opts || {},
         (text, pct) => send('progress', { key, text, pct }),
         line => send('progress', { key, text: line, pct: null, log: true }))));
     } finally { release(); }
@@ -237,9 +283,21 @@ function registerIpc() {
       let exited = false;
       const live = { mode: 'menu', host: '', world: null, afk: false, titleMode: null };
       const startedAtMs = Date.now();
-      const refresh = () => { const e = presence.playing.get(id); if (e) applyPresence(); };
+      // сведения о сервере (название из списка серверов игры, число игроков онлайн): обновляются раз в минуту
+      const pingServer = () => {
+        if (live.mode !== 'server' || !live.host) { live.srv = null; return; }
+        if (live.srvHost !== live.host) { live.srvHost = live.host; live.srvAt = 0; live.srv = { name: serverping.savedName(core.instDir(id), live.host) }; }
+        if (Date.now() - (live.srvAt || 0) < 60000) return;
+        const o = activity.resolveOpts(accounts.getSettings());
+        if (!o.showHost || !o.showPlayers) return;
+        live.srvAt = Date.now();
+        const { host, port } = serverping.splitHost(live.host), asked = live.host;
+        serverping.ping(host, port).then(r => { if (live.host === asked) { live.srv = { ...(live.srv || {}), online: r.online, max: r.max }; refresh(); } }).catch(() => { /* сервер не отвечает на запрос статуса: показываем только название */ });
+      };
+      const refresh = () => { const e = presence.playing.get(id); if (e) applyPresence(); if (live.mode === 'server') pingServer(); };
       // название, режим, измерение и биом читаются из файлов мира, пока игрок в одиночной игре
       const poll = setInterval(() => {
+        if (live.mode === 'server') { pingServer(); return; }
         if (live.mode !== 'single') return;
         const w = worldinfo.read(core.instDir(id), startedAtMs);
         if (w && JSON.stringify(w) !== JSON.stringify(live.world)) { live.world = w; refresh(); }
@@ -277,7 +335,7 @@ function registerIpc() {
       // в профиле Discord: во что играет и сколько
       const liveInst = core.listInstancesLive().find(x => x.id === id) || inst;
       presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(), live, inst: { name: inst.name, mc: inst.mc, loader: inst.loader },
-        state: `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${liveInst.modCount ? ` · ${liveInst.modCount} ${plural(liveInst.modCount, 'мод', 'мода', 'модов')}` : ''}` });
+        stateFor: lang => `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${liveInst.modCount ? ` · ${PRES[lang].mods(liveInst.modCount)}` : ''}` });
       applyPresence();
       send('progress', { key: 'launch:' + id, text: 'Запуск игры…', pct: 1 });
       return res;
@@ -320,7 +378,7 @@ function registerIpc() {
     const key = 'create';
     const release = lock(key);
     try {
-      return await withTask('Устанавливает сборку', () => core.startJob(() => core.installPackAny(opts,
+      return await withTask('pack', () => core.startJob(() => core.installPackAny(opts,
         (text, pct) => send('progress', { key, text, pct }),
         line => send('progress', { key, text: line, pct: null, log: true }),
         f => send('progress', { key: 'mod', ...f }))));
@@ -338,31 +396,75 @@ function registerIpc() {
     const release = lock(instanceId);
     try {
       const rp = (text, pct, extra) => send('progress', { key: 'mod', text, pct, ...(extra || {}) });
-      return await withTask('Устанавливает моды', () => core.startJob(() => source === 'curseforge' ? core.installCfMod({ instanceId, cfId: cfId || slug }, rp) : core.installMod({ instanceId, slug }, rp), 'mod'));
+      return await withTask('mods', () => core.startJob(() => source === 'curseforge' ? core.installCfMod({ instanceId, cfId: cfId || slug }, rp) : core.installMod({ instanceId, slug }, rp), 'mod'));
     } finally { release(); }
   });
   handle('mod:installFile', async ({ instanceId, url, filename, title, slug, version }) => {
     const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'mod', text, pct });
-    return await withTask('Устанавливает моды', () => core.startJob(() => core.installModFile({ instanceId, url, filename, title, slug, version }, rp), 'mod'));
+    return await withTask('mods', () => core.startJob(() => core.installModFile({ instanceId, url, filename, title, slug, version }, rp), 'mod'));
   });
   handle('mod:installMany', async ({ instanceId, slugs }) => {
     const release = lock(instanceId);
     try {
-      return await withTask('Устанавливает моды', () => core.startJob(() => core.installMods({ instanceId, slugs }, (text, pct, extra) =>
+      return await withTask('mods', () => core.startJob(() => core.installMods({ instanceId, slugs }, (text, pct, extra) =>
         extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'many', text, pct })), 'mod'));
     } finally { release(); }
   });
+  /* --- ресурспаки и шейдеры: в resourcepacks / shaderpacks выбранного экземпляра (любой загрузчик, в том числе Vanilla) --- */
+  const resTask = kind => (kind === 'shader' ? 'shader' : 'resourcepack');
+  handle('res:install', async ({ instanceId, kind, slug, source, cfId }) => {
+    const release = lock(instanceId);
+    try {
+      const rp = (text, pct, extra) => send('progress', { key: 'mod', text, pct, ...(extra || {}) });
+      return await withTask(resTask(kind), () => core.startJob(() => core.installResource({ instanceId, kind, source, slug, cfId }, rp), 'mod'));
+    } finally { release(); }
+  });
+  handle('res:installFile', async ({ instanceId, kind, url, filename, title, slug, version }) => {
+    const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'mod', text, pct });
+    return await withTask(resTask(kind), () => core.startJob(() => core.installResourceFile({ instanceId, kind, url, filename, title, slug, version }, rp), 'mod'));
+  });
+  handle('res:list', ({ instanceId, kind }) => core.listResources(instanceId, kind));
   /* --- OptiFine: список версий для Minecraft экземпляра и установка в папку mods --- */
   handle('optifine:list', id => core.optifineInfo(id));
   handle('optifine:versions', mc => core.optifineList(String(mc || '')));   // для окна создания экземпляра: версия игры ещё не установлена
   handle('optifine:install', async ({ id, file }) => {
     const release = lock(id);
     try {
-      return await withTask('Устанавливает OptiFine', () => core.installOptifine({ instanceId: id, file },
+      return await withTask('optifine', () => core.installOptifine({ instanceId: id, file },
         (text, pct, extra) => { if (extra) send('progress', { key: 'mod', ...extra }); }));
     } finally { release(); }
   });
+  /* --- обновления модов и сборок, копия экземпляра --- */
+  handle('mod:updates', id => core.checkModUpdates(id));
+  handle('mod:update', async ({ instanceId, files }) => {
+    const release = lock(instanceId);
+    try {
+      const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'mod', text, pct });
+      return await withTask('mods', () => core.startJob(() => core.updateMods({ instanceId, files }, rp), 'mod'));
+    } finally { release(); }
+  });
+  handle('pack:check', id => core.checkPackUpdate(id));
+  handle('pack:update', async ({ instanceId, versionId, backup, backupSuffix }) => {
+    const key = 'create';
+    const releaseKey = lock(key), release = lock(instanceId);
+    try {
+      return await withTask('pack', () => core.startJob(() => core.updatePack({ instanceId, versionId, backup: !!backup, backupSuffix },
+        (text, pct) => send('progress', { key, text, pct }),
+        line => send('progress', { key, text: line, pct: null, log: true }),
+        f => send('progress', { key: 'mod', ...f }))));
+    } finally { release(); releaseKey(); }
+  });
+  handle('inst:copy', async (id, o) => {
+    const key = 'create';
+    const releaseKey = lock(key), release = lock(id);
+    try {
+      return await withTask('copy', () => core.startJob(() => core.copyInstance(id,
+        (text, pct) => send('progress', { key, text, pct }), { suffix: o && o.suffix })));
+    } finally { release(); releaseKey(); }
+  });
   handle('mod:list', id => core.listMods(id));
+  handle('mod:all', id => core.listMods(id, { all: true }));
+  handle('mod:toggle', ({ instanceId, file, enabled }) => core.toggleMod(instanceId, file, !!enabled));
   handle('mod:check', id => core.checkMods(id));
   handle('mod:remove', ({ instanceId, file }) => core.removeMod(instanceId, file));
 }

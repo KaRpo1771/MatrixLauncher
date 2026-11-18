@@ -10,10 +10,20 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
 <link rel="icon" type="image/png" href="logo.png">
 <link rel="stylesheet" href="style.css">
+<script>
+/* интро включаем до первой отрисовки, чтобы не мигала главная; тема подставляется сразу (интро в цвете выбранной темы) */
+try{
+  var d=document.documentElement,t=localStorage.getItem('modmatrix:theme');
+  if(t) d.dataset.theme=t;
+  if(window.mm && localStorage.getItem('modmatrix:intro')!=='off') d.classList.add('intro-on');
+}catch(e){}
+</script>
 </head>
 <body>
+<div class="intro" id="intro" aria-hidden="true"><canvas id="introCv"></canvas></div>
+</div>
 <div class="titlebar" id="titlebar" aria-label="Заголовок окна">
-  <img src="logo.png" alt="" width="18" height="18"><span class="tb-title">MatrixL</span><span class="tb-ver" id="tbVer">v1.2.1</span>
+  <img src="logo.png" alt="" width="18" height="18"><span class="tb-title">MatrixL</span><span class="tb-ver" id="tbVer">v1.3.0</span>
   <span class="tb-space"></span>
   <button type="button" class="tb-btn" id="tbMin" aria-label="Свернуть окно" title="Свернуть"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5h8"/></svg></button>
   <button type="button" class="tb-btn" id="tbMax" aria-label="Развернуть окно" title="Развернуть"><svg viewBox="0 0 12 12" aria-hidden="true"><rect class="tb-r" x="1.5" y="1.5" width="9" height="9"/><path class="tb-r2" d="M3.5 3.5V1.5h7v7h-2"/></svg></button>
@@ -64,6 +74,14 @@
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 21 7.3 12 11.8 3 7.3z"/><path d="M3 11.6l9 4.5 9-4.5"/><path d="M3 15.9l9 4.5 9-4.5"/><path d="M8.2 7.3 12 9.2l3.8-1.9"/><path d="M12 11.8v4.3"/></svg>
           Сборки
         </button>
+        <button class="nav-item" data-page="resourcepacks">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4.4-4-7.2-9-7.2z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/></svg>
+          Ресурспаки
+        </button>
+        <button class="nav-item" data-page="shaders">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/></svg>
+          Шейдеры
+        </button>
         <button class="nav-item" data-page="favorites">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z"/><path d="M12 7.5l1 2.1 2.3.3-1.7 1.6.4 2.3-2-1.1-2 1.1.4-2.3-1.7-1.6 2.3-.3z"/><path d="M19 3v3M17.5 4.5h3"/></svg>
           Избранное
@@ -107,6 +125,7 @@
 <div class="toast" id="toast" hidden role="status"></div>
 
 <script src="i18n.js"></script>
+<script src="intro.js"></script>
 <script src="ui.js" defer></script>
 <script src="compat.js" defer></script>
 <script src="script.js" defer></script>

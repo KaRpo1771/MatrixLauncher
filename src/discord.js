@@ -62,11 +62,12 @@ class DiscordPresence {
 
   get active() { return this.enabled && this.ready; }
 
-  /* activity: { details, state, start (мс) } или null, убрать статус */
+  /* activity: { details, state, start (мс), largeText, party: [сейчас, всего] } или null, убрать статус */
   set(a) {
     this.activity = a ? {
       details: clip(a.details), state: clip(a.state),
       ...(a.start ? { timestamps: { start: Math.floor(a.start / 1000) } } : {}),
+      ...(Array.isArray(a.party) && a.party[1] > 0 ? { party: { id: 'matrixl-server', size: [Math.max(0, a.party[0] | 0), Math.max(1, a.party[1] | 0)] } } : {}),
       assets: { large_image: LOGO_URL || 'logo', large_text: clip(a.largeText) || 'MatrixL' }
     } : null;
     this._flush();

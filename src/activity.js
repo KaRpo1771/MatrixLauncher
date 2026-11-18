@@ -1,7 +1,7 @@
 'use strict';
 /* ============================================================
    Текст статуса Discord по состоянию игры: режим (меню, одиночная, сервер),
-   что делает игрок (АФК, строит, исследует пещеры…), мир и биом.
+   где находится игрок (измерение, пещеры, биом), мир, АФК и события. Тексты на русском и английском.
    ============================================================ */
 const BIOMES = {
   plains: 'Равнины', sunflower_plains: 'Подсолнечные равнины', forest: 'Лес', flower_forest: 'Цветочный лес', birch_forest: 'Берёзовый лес',
@@ -21,26 +21,50 @@ const BIOMES = {
   end_barrens: 'Бесплодный Край', the_void: 'Пустота'
 };
 
-function biomeName(id) {
+function biomeName(id, lang) {
   if (!id) return '';
   const short = String(id).replace(/^[^:]*:/, '');
+  if (lang === 'en') return short.split('_').map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' ');   // английские названия совпадают с идентификатором
   if (BIOMES[short]) return BIOMES[short];
   const t = short.replace(/_/g, ' ');
   return t.charAt(0).toUpperCase() + t.slice(1);   // биом из мода или datapack, показываем как есть
 }
 
+/* ---------- Тексты статуса на двух языках (язык берётся из настройки интерфейса лаунчера) ---------- */
+const TXT = {
+  ru: {
+    playing: v => `Играет в Minecraft ${v}`.trim(), mainMenu: 'Главное меню', afkMenu: 'Отсутствует (АФК) · главное меню',
+    single: 'Одиночная игра', singleIn: n => `Одиночная игра · ${n}`, loading: 'Загрузка мира…',
+    multi: 'Многопользовательская игра', onServer: 'Играет на сервере', onServerHost: h => `Сервер: ${h}`, inGame: 'В игре',
+    afk: 'Отсутствует (АФК)', death: 'Персонаж погиб', advancement: n => `Достижение получено: «${n}»`,
+    critical: 'Критическое состояние', spectator: 'Режим наблюдателя',
+    day: 'день', night: 'ночь', rain: 'дождь', thunder: 'гроза',
+    place: { nether: 'Нижний мир', end: 'Край', caves: 'Пещеры', deep_dark: 'Глубокая тьма', ocean: 'Океан', depths: 'Глубины', mountains: 'Горы', overworld: 'Верхний мир' }
+  },
+  en: {
+    playing: v => `Playing Minecraft ${v}`.trim(), mainMenu: 'Main menu', afkMenu: 'Away (AFK) · main menu',
+    single: 'Singleplayer', singleIn: n => `Singleplayer · ${n}`, loading: 'Loading world…',
+    multi: 'Multiplayer', onServer: 'Playing on a server', onServerHost: h => `Server: ${h}`, inGame: 'In game',
+    afk: 'Away (AFK)', death: 'Character died', advancement: n => `Advancement made: "${n}"`,
+    critical: 'Critical condition', spectator: 'Spectator mode',
+    day: 'daytime', night: 'night', rain: 'rain', thunder: 'thunderstorm',
+    place: { nether: 'The Nether', end: 'The End', caves: 'Caves', deep_dark: 'Deep Dark', ocean: 'Ocean', depths: 'Depths', mountains: 'Mountains', overworld: 'Overworld' }
+  }
+};
+const langOf = l => (l === 'en' ? 'en' : 'ru');
+
 const MODES = { 0: 'survival', 1: 'creative', 2: 'adventure', 3: 'spectator' };
 
 /* Что можно включать и выключать в расширенных настройках (по умолчанию включено всё, кроме координат) */
 const DEFAULT_OPTS = {
-  showHost: true,      // адрес сервера
+  showHost: true,      // адрес и название сервера
+  showPlayers: true,   // сколько игроков сейчас на сервере (запрос к серверу, как в списке серверов игры)
   showWorld: true,     // название мира
   showBiome: true,     // биом
-  showPlace: true,     // где игрок: пещеры, Нижний мир, Край, горы, поверхность
-  showAction: true,    // что делает: добывает, сражается, рыбачит, летает на элитрах…
+  showPlace: true,     // где игрок: Верхний мир, Нижний мир, Край, пещеры, глубины, горы
   showWeather: true,   // погода и время суток
-  showHealth: true,    // «на грани гибели»
-  showEvents: true,    // «только что погиб», «получил достижение»
+  showHealth: true,    // «Критическое состояние»
+  showEvents: true,    // «Персонаж погиб», «Достижение получено»
   showAfk: true,       // АФК
   showCoords: false,   // координаты X Y Z
   showInstance: true,  // название экземпляра и загрузчик в подсказке иконки
@@ -56,109 +80,92 @@ function resolveOpts(settings) {
   return o;
 }
 
-/* Где игрок: пещеры определяем по высоте и названию биома */
-function place(w) {
+/* Где игрок: пещеры определяем по высоте и названию биома. Возвращает ключ места */
+function placeKey(w) {
   if (!w) return '';
-  if (w.dim === 'nether') return 'в Нижнем мире';
-  if (w.dim === 'end') return 'в Крае';
+  if (w.dim === 'nether') return 'nether';
+  if (w.dim === 'end') return 'end';
   const b = String(w.biome || '');
-  if (/dripstone_caves|lush_caves/.test(b)) return 'в пещерах';
-  if (/deep_dark/.test(b)) return 'в Глубокой тьме';
-  if (/ocean/.test(b)) return 'в океане';
+  if (/dripstone_caves|lush_caves/.test(b)) return 'caves';
+  if (/deep_dark/.test(b)) return 'deep_dark';
+  if (/ocean/.test(b)) return 'ocean';
   const y = w.pos ? w.pos[1] : null;
-  if (y != null && y < -8) return 'в глубинах';
-  if (y != null && y < 48) return 'в пещерах';
-  if (y != null && y > 140) return 'высоко в горах';
-  return 'на поверхности';
+  if (y != null && y < -8) return 'depths';
+  if (y != null && y < 48) return 'caves';
+  if (y != null && y > 140) return 'mountains';
+  return 'overworld';
 }
-const UNDERGROUND = new Set(['в пещерах', 'в глубинах', 'в Глубокой тьме']);
+const place = (w, lang) => { const k = placeKey(w); return k ? TXT[langOf(lang)].place[k] : ''; };
 
-/* Предмет в руке подсказывает занятие */
-const FOOD = /^(bread|apple|golden_apple|enchanted_golden_apple|carrot|baked_potato|beetroot|melon_slice|sweet_berries|glow_berries|cookie|pumpkin_pie|cake|mushroom_stew|rabbit_stew|beetroot_soup|suspicious_stew|dried_kelp|honey_bottle|cooked_.+|steak)$/;
-function heldAction(h) {
-  if (!h) return '';
-  if (/_pickaxe$/.test(h)) return 'Добывает ресурсы';
-  if (/_axe$/.test(h)) return 'Рубит деревья';
-  if (/_shovel$/.test(h)) return 'Копает';
-  if (/_hoe$/.test(h)) return 'Возделывает землю';
-  if (/_sword$|^trident$|^mace$/.test(h)) return 'Сражается';
-  if (/^(bow|crossbow)$/.test(h)) return 'Стреляет из лука';
-  if (h === 'fishing_rod') return 'Рыбачит';
-  if (h === 'firework_rocket') return 'Запускает фейерверки';
-  if (/^(map|filled_map|compass|recovery_compass|spyglass)$/.test(h)) return 'Ищет путь';
-  if (/^(shears)$/.test(h)) return 'Стрижёт овец';
-  if (/^(bucket|water_bucket|lava_bucket)$/.test(h)) return 'Работает с ведром';
-  if (FOOD.test(h)) return 'Перекусывает';
-  if (/^(redstone|repeater|comparator|piston|sticky_piston|observer|hopper|dispenser|dropper)$/.test(h)) return 'Строит механизмы';
-  return '';
-}
-
-/* Главное занятие игрока (без места): АФК важнее всего, дальше события, транспорт, здоровье, предмет в руке */
-function action(w, live, o, now) {
-  if (o.showAfk && live.afk) return 'Стоит АФК';
-  if (o.showEvents && live.event && live.event.until > now) return live.event.text;
-  const m = w ? MODES[w.gamemode] : null;
-  if (!w) return '';
-  if (m === 'spectator') return 'Наблюдает';
-  if (o.showAction) {
-    if (w.elytra && w.pos && w.pos[1] > 80 && w.dim !== 'nether') return 'Летает на элитрах';
-    if (w.riding) return 'Едет верхом';
-  }
-  if (o.showHealth && m !== 'creative' && w.health != null && w.health <= 6) return 'Борется за жизнь';
-  if (o.showAction) {
-    const h = heldAction(w.held);
-    if (h) return h;
-  }
-  if (m === 'creative') return 'Строит';
-  if (m === 'adventure') return 'Путешествует';
-  if (o.showPlace && UNDERGROUND.has(place(w)) && (!m || m === 'survival')) return 'Исследует';
-  return w.hardcore ? 'Выживает в хардкоре' : 'Играет';
-}
 /* Погода и время суток (DayTime: 0 — рассвет, 13000–23000 — ночь) */
-function sky(w) {
-  if (!w) return '';
-  if (w.dim !== 'overworld') return '';
+function sky(w, lang) {
+  if (!w || w.dim !== 'overworld') return '';
+  const T = TXT[langOf(lang)];
   const parts = [];
-  if (w.dayTime != null) { const t = ((w.dayTime % 24000) + 24000) % 24000; parts.push(t >= 13000 && t < 23000 ? 'ночь' : 'день'); }
-  if (w.thundering) parts.push('гроза'); else if (w.raining) parts.push('дождь');
+  if (w.dayTime != null) { const t = ((w.dayTime % 24000) + 24000) % 24000; parts.push(t >= 13000 && t < 23000 ? T.night : T.day); }
+  if (w.thundering) parts.push(T.thunder); else if (w.raining) parts.push(T.rain);
   return parts.join(', ');
 }
 
-/* live: { mode:'menu'|'single'|'server', host, world, afk, event }; o: опции из resolveOpts */
-function describe(live, inst, opts, now = Date.now()) {
+/* Событие (смерть, достижение) в тексте нужного языка */
+function eventText(ev, lang) {
+  const T = TXT[langOf(lang)];
+  if (!ev) return '';
+  if (ev.type === 'advancement') return T.advancement(ev.name || '');
+  if (ev.type === 'death') return T.death;
+  return '';
+}
+
+/* Статусная метка игрока (не место): АФК важнее всего, дальше событие, наблюдатель, критическое здоровье */
+function statusLabel(w, live, o, now, lang) {
+  const T = TXT[langOf(lang)];
+  if (o.showAfk && live.afk) return T.afk;
+  if (o.showEvents && live.event && live.event.until > now) return eventText(live.event, lang);
+  if (w) {
+    const m = MODES[w.gamemode];
+    if (m === 'spectator') return T.spectator;
+    if (o.showHealth && m !== 'creative' && w.health != null && w.health <= 6) return T.critical;
+  }
+  return '';
+}
+
+/* live: { mode:'menu'|'single'|'server', host, srv, world, afk, event }; o: опции из resolveOpts; lang: 'ru' | 'en' */
+function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   const o = opts || DEFAULT_OPTS;
+  const T = TXT[langOf(lang)];
   const mc = inst && inst.mc ? inst.mc : '';
   const largeText = o.showInstance && inst
     ? `${inst.name ? inst.name + ' · ' : ''}Minecraft ${mc}${inst.loader && inst.loader !== 'vanilla' ? ' ' + inst.loader : ''}`.trim() : 'MatrixL';
   if (!live || live.mode === 'menu' || !live.mode) {
-    return { details: `Играет в Minecraft ${mc}`.trim(), state: o.showAfk && live && live.afk ? 'Стоит АФК в главном меню' : 'В главном меню', largeText };
+    return { details: T.playing(mc), state: o.showAfk && live && live.afk ? T.afkMenu : T.mainMenu, largeText };
   }
   if (live.mode === 'server') {
-    const where = !o.showHost || !live.host ? 'на сервере' : `на сервере ${live.host}`;
-    let state = 'Многопользовательская игра';
-    if (o.showAfk && live.afk) state = 'Стоит АФК';
-    else if (o.showEvents && live.event && live.event.until > now) state = live.event.text;
-    return { details: `Играет ${where}`, state, largeText };
+    const srv = live.srv || {};
+    const name = o.showHost && live.host ? (srv.name || live.host) : '';
+    const details = name ? T.onServerHost(name) : T.onServer;
+    const st = statusLabel(null, live, o, now, lang);
+    const out = { details, state: st || T.multi, largeText };
+    // «(12 из 100)» рядом со строкой состояния: Discord рисует это сам из party.size
+    if (o.showHost && o.showPlayers && Number.isFinite(srv.online) && Number.isFinite(srv.max) && srv.max > 0) out.party = [Math.max(0, srv.online), Math.max(srv.max, srv.online)];
+    return out;
   }
   // одиночная игра
   const w = live.world;
-  const details = o.showWorld && w && w.name ? `Одиночная игра · ${w.name}` : 'Одиночная игра';
-  if (!w) return { details, state: o.showAfk && live.afk ? 'Стоит АФК' : 'Загружает мир…', largeText };
-  const act = action(w, live, o, now);
-  let p = o.showPlace ? place(w) : '';
-  const eventNow = o.showEvents && live.event && live.event.until > now;
-  const afkNow = o.showAfk && live.afk;
-  if (act === 'Летает на элитрах' || (p === 'на поверхности' && act !== 'Играет')) p = '';
-  const main = (!eventNow && !afkNow && act === 'Исследует' && UNDERGROUND.has(p))
-    ? (p === 'в пещерах' ? 'Исследует пещеры' : p === 'в глубинах' ? 'Исследует глубины' : 'Исследует Глубокую тьму')
-    : `${act} ${(eventNow ? '' : p)}`.trim();
-  const parts = [main];
-  const bn = o.showBiome ? biomeName(w.biome) : '';
+  const details = o.showWorld && w && w.name ? T.singleIn(w.name) : T.single;
+  if (!w) return { details, state: o.showAfk && live.afk ? T.afk : T.loading, largeText };
+  const parts = [];
+  const st = statusLabel(w, live, o, now, lang);
+  if (st) parts.push(st);
+  const bn = o.showBiome ? biomeName(w.biome, lang) : '';
+  // для пещер, Глубокой тьмы и океана место уже названо биомом, второй раз его не повторяем
+  const byBiome = /dripstone_caves|lush_caves|deep_dark|ocean/.test(String(w.biome || '')) && w.dim === 'overworld' && !!bn;
+  const pl = o.showPlace && !byBiome ? place(w, lang) : '';
+  if (pl) parts.push(pl);
   if (bn) parts.push(bn);
-  const sk = o.showWeather ? sky(w) : '';
+  const sk = o.showWeather ? sky(w, lang) : '';
   if (sk) parts.push(sk);
   if (o.showCoords && w.pos) parts.push(`${Math.round(w.pos[0])} ${Math.round(w.pos[1])} ${Math.round(w.pos[2])}`);
-  return { details, state: parts.join(' · '), largeText };
+  return { details, state: parts.length ? parts.join(' · ') : T.inGame, largeText };
 }
 
 /* Из заголовка окна Minecraft: в каком режиме игра */
@@ -179,13 +186,13 @@ function parseLogLine(line, live, name) {
   if (name && l.includes(name)) {
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     if ((m = new RegExp(esc + ' has (?:made the advancement|completed the challenge|reached the goal) \\[(.+?)\\]').exec(l))) {
-      live.event = { text: `Получил достижение «${m[1].slice(0, 60)}»`, until: Date.now() + 120000 }; return true;
+      live.event = { type: 'advancement', name: m[1].slice(0, 60), until: Date.now() + 120000 }; return true;
     }
     if (new RegExp('(?:\\]: |\\] )(?:\\[CHAT\\] )?' + esc + ' ' + DEATH.source).test(l) && !/<[^>]*>/.test(l.split(esc)[0] || '')) {
-      live.event = { text: 'Только что погиб', until: Date.now() + 90000 }; return true;
+      live.event = { type: 'death', until: Date.now() + 90000 }; return true;
     }
   }
   return false;
 }
 
-module.exports = { describe, modeFromTitle, parseLogLine, biomeName, resolveOpts, DEFAULT_OPTS, _t: { place, action, heldAction, sky } };
+module.exports = { describe, modeFromTitle, parseLogLine, biomeName, resolveOpts, langOf, TXT, DEFAULT_OPTS, _t: { place, sky, eventText } };

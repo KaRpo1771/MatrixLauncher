@@ -88,7 +88,7 @@
     const add = i => issues.push(i);
     const mods = (items || []).filter(m => m && (m.kind || 'mod') === 'mod');
     const others = (items || []).filter(m => m && (m.kind || 'mod') !== 'mod');
-    if (others.length) add({ level: 'info', code: 'skipped', title: 'Не моды', text: 'Плагины и сборки не ставятся в папку модов и в проверке не участвуют.', mods: others.map(titleOf) });
+    if (others.length) add({ level: 'info', code: 'skipped', title: 'Не моды', text: 'Плагины, сборки, ресурспаки и шейдеры не ставятся в папку модов и в проверке не участвуют.', mods: others.map(titleOf) });
 
     /* 1. один и тот же мод добавлен дважды (в т.ч. из разных источников) */
     const byName = new Map();
