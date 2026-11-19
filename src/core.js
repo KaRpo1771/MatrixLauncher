@@ -1108,6 +1108,7 @@ if([MMW]::Idle() -ge 120){$a='1'}else{$a='0'};if($a -ne $la){$la=$a;[Console]::O
   return { pid: child.pid };
 }
 function isRunning(id) { return running.has(id); }
+function anyRunning() { return running.size > 0; }
 
 /* ---------- моды из Modrinth в выбранную установку ---------- */
 function loadersFor(loader) {
@@ -2761,7 +2762,7 @@ module.exports = {
   init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,
   loaderOptions, changeLoader, sysInfo, recommendRam, effectiveRam, maxRam, watchInstances, ensureAuthlib,
-  launch, isRunning, installMod, listMods, toggleMod, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, javaCatalog, javaInstall, javaRemove, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,
+  launch, isRunning, anyRunning, installMod, listMods, toggleMod, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, javaCatalog, javaInstall, javaRemove, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,
   // для тестов
   _t: { cfFingerprint, dedupeMods, resolvePackSource, uniqueInstanceId, readCfPack, cfCard, cfFileUrl, cfPickFile, readMrpack, packDest, download, compareVer, forgeFor, neoforgeFor, fabricLikeFor, clampRam, countMods, lineFeeder, decodeBytes, ruleOk, mavenPath, resolveLibs, readVersion, buildCommand, expandArgs, sub, loadersFor, slugify, installFabricLike, resolveForgeLike }
 };

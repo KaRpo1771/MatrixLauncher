@@ -35,7 +35,8 @@ const TXT = {
   ru: {
     playing: v => `Играет в Minecraft ${v}`.trim(), mainMenu: 'Главное меню', afkMenu: 'Отсутствует (АФК) · главное меню',
     single: 'Одиночная игра', singleIn: n => `Одиночная игра · ${n}`, loading: 'Загрузка мира…',
-    multi: 'Многопользовательская игра', onServer: 'Играет на сервере', onServerHost: h => `Сервер: ${h}`, inGame: 'В игре',
+    multi: 'Мультиплеер', onServer: 'Играет на сервере', onServerHost: h => `Сервер: ${h}`, inGame: 'В игре',
+    mods: n => { const m = n % 100, d = n % 10; return `${n} ${(m > 10 && m < 15) ? 'модов' : d === 1 ? 'мод' : (d >= 2 && d <= 4) ? 'мода' : 'модов'}`; },
     afk: 'Отсутствует (АФК)', death: 'Персонаж погиб', advancement: n => `Достижение получено: «${n}»`,
     critical: 'Критическое состояние', spectator: 'Режим наблюдателя',
     day: 'день', night: 'ночь', rain: 'дождь', thunder: 'гроза',
@@ -45,6 +46,7 @@ const TXT = {
     playing: v => `Playing Minecraft ${v}`.trim(), mainMenu: 'Main menu', afkMenu: 'Away (AFK) · main menu',
     single: 'Singleplayer', singleIn: n => `Singleplayer · ${n}`, loading: 'Loading world…',
     multi: 'Multiplayer', onServer: 'Playing on a server', onServerHost: h => `Server: ${h}`, inGame: 'In game',
+    mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`,
     afk: 'Away (AFK)', death: 'Character died', advancement: n => `Advancement made: "${n}"`,
     critical: 'Critical condition', spectator: 'Spectator mode',
     day: 'daytime', night: 'night', rain: 'rain', thunder: 'thunderstorm',
@@ -67,7 +69,6 @@ const DEFAULT_OPTS = {
   showEvents: true,    // «Персонаж погиб», «Достижение получено»
   showAfk: true,       // АФК
   showCoords: false,   // координаты X Y Z
-  showInstance: true,  // название экземпляра и загрузчик в подсказке иконки
   showTimer: true,     // сколько времени идёт игра
   showLauncher: true   // что делаете в самом лаунчере (каталоги, настройки)
 };
@@ -134,14 +135,17 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   const o = opts || DEFAULT_OPTS;
   const T = TXT[langOf(lang)];
   const mc = inst && inst.mc ? inst.mc : '';
-  const largeText = o.showInstance && inst
-    ? `${inst.name ? inst.name + ' · ' : ''}Minecraft ${mc}${inst.loader && inst.loader !== 'vanilla' ? ' ' + inst.loader : ''}`.trim() : 'MatrixL';
+  // плашка на иконке всегда: «Forge 1.12.2 (89 модов)», для чистой игры «Minecraft 1.12.2»
+  const LOADERS = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
+  const largeText = inst && mc
+    ? `${LOADERS[inst.loader] || 'Minecraft'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : 'MatrixL';
   if (!live || live.mode === 'menu' || !live.mode) {
     return { details: T.playing(mc), state: o.showAfk && live && live.afk ? T.afkMenu : T.mainMenu, largeText };
   }
   if (live.mode === 'server') {
     const srv = live.srv || {};
-    const name = o.showHost && live.host ? (srv.name || live.host) : '';
+    // «Сервер» включён: показываем только адрес; выключен: только название сервера из списка игры (если оно есть)
+    const name = o.showHost ? live.host : (srv.name || '');
     const details = name ? T.onServerHost(name) : T.onServer;
     const st = statusLabel(null, live, o, now, lang);
     const out = { details, state: st || T.multi, largeText };

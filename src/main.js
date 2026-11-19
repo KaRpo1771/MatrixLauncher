@@ -44,7 +44,7 @@ const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: '
    Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
 const PRES = {
   ru: {
-    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера' },
+    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера', servers: 'Просмотр серверов' },
     viewing: { mod: 'Просмотр мода', plugin: 'Просмотр плагина', modpack: 'Просмотр сборки', resourcepack: 'Просмотр ресурспака', shader: 'Просмотр шейдера' }, author: a => `Автор: ${a}`,
     tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
     inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
@@ -52,7 +52,7 @@ const PRES = {
     mods: n => `${n} ${plural(n, 'мод', 'мода', 'модов')}`
   },
   en: {
-    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher' },
+    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher', servers: 'Checking servers' },
     viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader' }, author: a => `By ${a}`,
     tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance', export: 'Exporting a modpack' },
     inLauncher: 'In MatrixL launcher', playing: v => `Playing Minecraft ${v}`.trim(),
@@ -60,7 +60,7 @@ const PRES = {
     mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`
   }
 };
-const PAGE_IDS = new Set(['home', 'mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'favorites', 'settings']);
+const PAGE_IDS = new Set(['home', 'mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'favorites', 'settings', 'servers']);
 const presence = { page: 'home', item: null, inst: null, favs: 0, gv: '', lang: 'ru', tasks: new Map(), playing: new Map() };
 const CATALOG_PAGES = new Set(['mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders']);
 const ITEM_KINDS = ['mod', 'plugin', 'modpack', 'resourcepack', 'shader'];
@@ -115,6 +115,9 @@ function configureDiscord() {
    пока игра не закроется полностью (сворачивание окна игры его не возвращает). Работает только на Windows: там есть слежение за окном игры. */
 const gameMin = new Map();   // id установки → окно игры свёрнуто
 let hiddenByGame = false;
+let quitting = false;          // приложение действительно завершается (а не просто закрыли окно)
+let closeAfterGame = false;    // окно закрыли при работающей игре: лаунчер спрятан и выйдет сам, когда игра закроется
+function gameActive() { return presence.playing.size > 0 || core.anyRunning(); }
 let lastCrash = null;   // последний отчёт о падении игры (для кнопки «Показать файл»)
 function hideOnLaunchOn() { return process.platform === 'win32' && !!accounts.getSettings().hideOnLaunch; }
 function hideLauncher() {
@@ -123,7 +126,7 @@ function hideLauncher() {
 }
 function showLauncher(focus) {
   if (!win || win.isDestroyed()) return;
-  hiddenByGame = false;
+  hiddenByGame = false; closeAfterGame = false;
   win.setSkipTaskbar(false);
   if (win.isMinimized()) win.restore();
   win.show();
@@ -178,7 +181,7 @@ function registerIpc() {
     const o = activity.resolveOpts(accounts.getSettings());
     const lang = activity.langOf(presence.lang);
     const ru = lang === 'ru';
-    const inst = { name: ru ? 'Мой экземпляр' : 'My instance', mc: '1.20.1', loader: 'fabric' };
+    const inst = { name: ru ? 'Мой экземпляр' : 'My instance', mc: '1.20.1', loader: 'fabric', modCount: 89 };
     const world = { name: ru ? 'Новый мир' : 'New World', gamemode: 0, hardcore: false, dim: 'overworld', pos: [120, 70, -64], biome: 'minecraft:forest', health: 20, dayTime: 3000, raining: false, thundering: false };
     const nether = { ...world, dim: 'nether', biome: 'minecraft:crimson_forest' };
     const ev = { type: 'advancement', name: ru ? 'Каменный век' : 'Stone Age', until: Date.now() + 1e5 };
@@ -209,6 +212,8 @@ function registerIpc() {
     applyPresence();
   });
   /* --- обновление лаунчера через GitHub --- */
+  /* вкладка «Серверы»: онлайн, игроки, задержка по адресу из списка */
+  handle('server:status', addr => serverping.status(String(addr || '').slice(0, 280)));
   handle('update:state', () => updater.state());
   handle('update:check', () => updater.check());
   handle('update:install', () => updater.install());
@@ -314,6 +319,7 @@ function registerIpc() {
           if (crash) lastCrash = { ...crash, id };
           send('game-exit', { id, code });
           // игра упала: лаунчер возвращается из скрытого режима, и сразу показывается окно с отчётом
+          if (!presence.playing.size && closeAfterGame && !crash) { quitting = true; app.quit(); return; }   // окно уже закрывали: теперь можно выйти
           if (hiddenByGame && !presence.playing.size) showLauncher(true);
           if (crash) {
             if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
@@ -334,7 +340,7 @@ function registerIpc() {
         }).catch(e => { clearInterval(poll); try { llog.finish(0); } catch { /* не критично */ } throw e; });   // при включённом «скрывать при запуске» лаунчер остаётся скрытым, пока игра не закроется полностью
       // в профиле Discord: во что играет и сколько
       const liveInst = core.listInstancesLive().find(x => x.id === id) || inst;
-      presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(), live, inst: { name: inst.name, mc: inst.mc, loader: inst.loader },
+      presence.playing.set(id, { name: inst.name, mc: inst.mc, start: Date.now(), live, inst: { name: inst.name, mc: inst.mc, loader: inst.loader, modCount: liveInst.modCount || 0 },
         stateFor: lang => `${inst.name} · ${LD_NAME[inst.loader] || inst.loader}${liveInst.modCount ? ` · ${PRES[lang].mods(liveInst.modCount)}` : ''}` });
       applyPresence();
       send('progress', { key: 'launch:' + id, text: 'Запуск игры…', pct: 1 });
@@ -503,6 +509,15 @@ function createWindow() {
   });
   win.on('maximize', () => send('win-state', true));
   win.on('unmaximize', () => send('win-state', false));
+  /* Игра запущена как дочерний процесс лаунчера (её вывод идёт в него по каналам). Если закрыть лаунчер, пока игра работает,
+     она закрывается вместе с ним. Поэтому крестик при работающей игре только прячет окно, а сам лаунчер выходит, когда игра закрылась. */
+  win.on('close', e => {
+    if (quitting || !gameActive()) return;
+    e.preventDefault();
+    closeAfterGame = true;
+    hiddenByGame = true;
+    win.setSkipTaskbar(true); win.hide();
+  });
   win.on('closed', () => { win = null; });
 }
 
@@ -542,6 +557,6 @@ app.whenReady().then(() => {
   setTimeout(() => accounts.prewarmSkin(), 1500);   // скин и плащ выбранного аккаунта готовятся заранее
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
-app.on('before-quit', () => rpc.destroy());
+app.on('before-quit', () => { quitting = true; rpc.destroy(); });
 app.on('second-instance', () => { if (win) { showLauncher(true); } });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -1932,7 +1932,7 @@ const DC_OPTS = [
     {k:"showWorld",  t:"Название мира",        d:"Название одиночного мира"}
   ]},
   {g:"Многопользовательская игра", items:[
-    {k:"showHost",    t:"Сервер",              d:"Название сервера из списка серверов игры или его адрес"},
+    {k:"showHost",    t:"Сервер",              d:"Адрес сервера. Если выключено, показывается только название сервера из списка игры"},
     {k:"showPlayers", t:"Игроков онлайн",      d:"Сколько игроков сейчас на сервере: «(128 из 500)». Лаунчер запрашивает статус сервера так же, как список серверов игры"}
   ]},
   {g:"Состояние игрока", items:[
@@ -1941,7 +1941,6 @@ const DC_OPTS = [
     {k:"showEvents", t:"События",              d:"«Персонаж погиб» и «Достижение получено» на пару минут"}
   ]},
   {g:"Общее", items:[
-    {k:"showInstance", t:"Экземпляр",              d:"Название экземпляра и загрузчик в подсказке к иконке"},
     {k:"showTimer",    t:"Таймер",                 d:"Сколько времени вы играете"},
     {k:"showLauncher", t:"Действия в лаунчере",    d:"Что вы делаете вне игры: просмотр каталогов, настройки, установка"}
   ]}
@@ -1985,9 +1984,174 @@ async function openDiscordOptions(){
 }
 
 /* ============================================================
+   Серверы: список адресов с онлайном, числом игроков и задержкой.
+   Список хранится на этом компьютере; запросы идут из приложения
+   тем же способом, что и список серверов в самой игре.
+   ============================================================ */
+const SRV_KEY = "matrixl:servers", SRV_MAX = 30, SRV_EVERY = 30000;
+const srvEn = ()=> window.I18N && window.I18N.lang() === "en";
+const srvState = { list: [], res: new Map(), busy: new Set(), timer: 0 };
+
+function srvLoad(){
+  try{
+    const p = JSON.parse(localStorage.getItem(SRV_KEY) || "[]");
+    srvState.list = Array.isArray(p) ? p.filter(x=> x && x.id && typeof x.addr === "string").slice(0, SRV_MAX) : [];
+  }catch(e){ srvState.list = []; }
+}
+function srvSave(){ try{ localStorage.setItem(SRV_KEY, JSON.stringify(srvState.list)); }catch(e){} }
+function srvNorm(raw){
+  const a = String(raw||"").trim().toLowerCase().replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, "");
+  const m = /^([a-z0-9]([a-z0-9._-]{0,251}[a-z0-9])?)(?::(\d{1,5}))?$/.exec(a);
+  if(!m) return "";
+  const port = m[3] ? Number(m[3]) : 25565;
+  if(port < 1 || port > 65535) return "";
+  return port === 25565 ? m[1] : `${m[1]}:${port}`;
+}
+const SRV_REASON = {
+  "not-found":"Адрес не найден", "refused":"Соединение отклонено", "timeout":"Сервер не отвечает",
+  "no-answer":"Сервер не ответил на запрос", "bad-address":"Неверный адрес", "empty":"Введите адрес сервера"
+};
+
+function srvCardHtml(s){
+  const r = srvState.res.get(s.id), busy = srvState.busy.has(s.id), safe = cmEsc;
+  let cls = "srv-wait", badge = "Проверяю…", body = "";
+  if(r && r.online){
+    cls = "srv-on"; badge = "Онлайн";
+    const ratio = r.max > 0 ? Math.min(100, Math.round(r.players / r.max * 100)) : 0;
+    const names = (r.sample||[]).length ? ` title="${safe(r.sample.join(", "))}"` : "";
+    body = `
+      <div class="srv-stats">
+        <div class="srv-stat"${names}><small>Игроки</small><b>${r.players} <i>${srvEn() ? "of" : "из"} ${r.max}</i></b></div>
+        <div class="srv-stat"><small>Задержка</small><b>${r.latency} <i>мс</i></b></div>
+        <div class="srv-stat"><small>Версия</small><b class="srv-ver">${safe(r.version || "-")}</b></div>
+      </div>
+      <div class="srv-bar" role="progressbar" aria-label="Заполненность сервера" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ratio}"><span style="width:${ratio}%"></span></div>
+      ${r.motd ? `<p class="srv-motd">${safe(r.motd)}</p>` : ""}
+      ${(r.sample||[]).length ? `<p class="srv-who">${srvEn() ? "Playing now" : "Сейчас в игре"}: ${safe(r.sample.join(", "))}${r.players > r.sample.length ? (srvEn() ? " and others" : " и др.") : ""}</p>` : ""}`;
+  }else if(r){
+    cls = "srv-off"; badge = "Оффлайн";
+    body = `<p class="srv-motd srv-err">${safe(SRV_REASON[r.reason] || "Сервер недоступен")}</p>`;
+  }else{
+    body = `<p class="srv-motd">Запрашиваю состояние сервера…</p>`;
+  }
+  const icon = r && r.favicon ? `<img src="${safe(r.favicon)}" alt="" width="56" height="56">` : `<span class="srv-ph" aria-hidden="true"></span>`;
+  const at = r && r.at ? new Date(r.at).toLocaleTimeString(srvEn() ? "en-GB" : "ru-RU", {hour:"2-digit", minute:"2-digit", second:"2-digit"}) : "";
+  return `
+    <article class="srv-card ${cls}" data-id="${safe(s.id)}">
+      <div class="srv-head">
+        <div class="srv-icon">${icon}</div>
+        <div class="srv-title">
+          <h3>${safe(s.name || s.addr)}</h3>
+          <code>${safe(s.addr)}</code>
+        </div>
+        <span class="srv-badge"><i></i>${badge}</span>
+      </div>
+      ${body}
+      <div class="srv-foot">
+        <span class="srv-at">${at ? (srvEn() ? "Checked at " : "Проверено в ") + at : ""}</span>
+        <button type="button" class="btn" data-act="copy">Копировать адрес</button>
+        <button type="button" class="btn" data-act="refresh" ${busy ? "disabled" : ""}>${busy ? "Проверяю…" : "Обновить"}</button>
+        <button type="button" class="btn danger" data-act="del">Удалить</button>
+      </div>
+    </article>`;
+}
+
+async function srvCheck(id){
+  const s = srvState.list.find(x=> x.id === id);
+  if(!s || srvState.busy.has(id)) return;
+  srvState.busy.add(id); srvPaint(id);
+  let r;
+  try{
+    const resp = await mm.invoke("server:status", s.addr);
+    r = resp && resp.ok ? resp.data : { online:false, reason:"no-answer", at:Date.now() };
+  }catch(e){ r = { online:false, reason:"no-answer", at:Date.now() }; }
+  srvState.busy.delete(id);
+  srvState.res.set(id, r);
+  srvPaint(id); srvSummary();
+}
+function srvCheckAll(){ srvState.list.forEach(s=> srvCheck(s.id)); }
+
+function srvPaint(id){
+  const el = document.querySelector(`.srv-card[data-id="${CSS.escape(id)}"]`);
+  const s = srvState.list.find(x=> x.id === id);
+  if(!el || !s) return;
+  const tmp = document.createElement("div"); tmp.innerHTML = srvCardHtml(s).trim();
+  const next = tmp.firstElementChild;
+  el.replaceWith(next);
+}
+function srvSummary(){
+  const el = $("srvCount"); if(!el) return;
+  const on = srvState.list.filter(s=> (srvState.res.get(s.id)||{}).online).length;
+  const ply = srvState.list.reduce((n,s)=>{ const r = srvState.res.get(s.id); return n + (r && r.online ? r.players : 0); }, 0);
+  el.textContent = !srvState.list.length ? (srvEn() ? "No servers yet" : "Серверов пока нет")
+    : srvEn() ? `Online: ${on} of ${srvState.list.length}, total players: ${ply}` : `Онлайн: ${on} из ${srvState.list.length}, игроков всего: ${ply}`;
+}
+
+function renderServersPage(){
+  clearInterval(srvState.timer); srvState.timer = 0;
+  const content = $("content");
+  if(!window.mm){
+    content.innerHTML = `<h1>Серверы</h1><div class="state">Проверка серверов работает только в приложении MatrixL.</div>`;
+    return;
+  }
+  srvLoad();
+  content.innerHTML = `
+    <h1>Серверы</h1>
+    <p class="page-lede">Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд.</p>
+    <form class="srv-add" id="srvAdd" autocomplete="off">
+      <label class="field"><span>Адрес сервера</span><input type="text" id="srvAddr" maxlength="280" placeholder="play.example.net или 123.45.67.89:25565" spellcheck="false" aria-label="Адрес сервера"></label>
+      <label class="field"><span>Название (необязательно)</span><input type="text" id="srvName" maxlength="40" placeholder="Мой сервер" aria-label="Название сервера"></label>
+      <button class="btn primary" type="submit">＋ Добавить сервер</button>
+    </form>
+    <div class="meta-row"><div class="count" id="srvCount"></div>
+      <div class="meta-right"><button class="btn" type="button" id="srvRefresh">Обновить все</button></div>
+    </div>
+    <div class="srv-grid" id="srvGrid"></div>`;
+  const grid = $("srvGrid");
+  const draw = ()=>{
+    grid.innerHTML = srvState.list.length
+      ? srvState.list.map(srvCardHtml).join("")
+      : `<div class="state">Здесь пока пусто. Введите адрес сервера выше, например <b>play.example.net</b> (порт указывать нужно только если он не 25565).</div>`;
+    srvSummary();
+  };
+  draw();
+
+  $("srvAdd").addEventListener("submit", e=>{
+    e.preventDefault();
+    const addr = srvNorm($("srvAddr").value);
+    if(!addr){ toast($("srvAddr").value.trim() ? SRV_REASON["bad-address"] : SRV_REASON["empty"]); $("srvAddr").focus(); return; }
+    if(srvState.list.some(s=> s.addr === addr)){ toast("Этот сервер уже в списке"); return; }
+    if(srvState.list.length >= SRV_MAX){ toast(srvEn() ? `The list can hold up to ${SRV_MAX} servers` : `В списке может быть не больше ${SRV_MAX} серверов`); return; }
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    srvState.list.push({ id, addr, name: $("srvName").value.trim().slice(0, 40) });
+    srvSave();
+    $("srvAddr").value = ""; $("srvName").value = "";
+    draw(); srvCheck(id);
+  });
+  $("srvRefresh").addEventListener("click", srvCheckAll);
+  grid.addEventListener("click", e=>{
+    const b = e.target.closest("button[data-act]"); if(!b) return;
+    const id = b.closest(".srv-card").dataset.id, s = srvState.list.find(x=> x.id === id); if(!s) return;
+    if(b.dataset.act === "refresh") srvCheck(id);
+    else if(b.dataset.act === "copy"){
+      (navigator.clipboard ? navigator.clipboard.writeText(s.addr) : Promise.reject()).then(()=> toast("Адрес скопирован"), ()=> toast("Не удалось скопировать"));
+    }else if(b.dataset.act === "del"){
+      srvState.list = srvState.list.filter(x=> x.id !== id); srvState.res.delete(id);
+      srvSave(); draw();
+    }
+  });
+
+  srvCheckAll();
+  srvState.timer = setInterval(()=>{
+    if(state.page !== "servers"){ clearInterval(srvState.timer); srvState.timer = 0; return; }
+    if(!document.hidden) srvCheckAll();
+  }, SRV_EVERY);
+}
+
+/* ============================================================
    Навигация и каркас
    ============================================================ */
-const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки"};
+const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки", servers:"Серверы"};
 
 function setPage(page, opts){
   state.page = page;
@@ -2003,6 +2167,7 @@ function setPage(page, opts){
   }
   else if(page === "favorites") renderFavoritesPage();
   else if(page === "settings") renderSettingsPage();
+  else if(page === "servers") renderServersPage();
   else renderCatalogPage(page, opts);
 }
 

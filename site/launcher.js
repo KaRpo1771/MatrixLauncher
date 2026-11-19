@@ -718,7 +718,7 @@
     return `<div class="banner err"><b>Minecraft закрылся из-за ошибки</b>${esc(c.summary || 'Игра завершилась аварийно (код ' + c.code + ').')}</div>
       <pre class="lc-log crash-log" id="crashLog" tabindex="0">${esc(c.text)}</pre>
       <div class="lc-install crash-act">
-        <button class="btn primary" data-act="crash-copy" type="button">Скопировать отчёт</button>
+        <button class="btn primary" data-act="crash-copy" type="button">Скопировать лог</button>
         ${c.hasFile ? '<button class="btn" data-act="crash-reveal" type="button">Показать файл</button>' : ''}
       </div>
       <h4 class="sk-h crash-ai-h">Спросить у ИИ</h4>
@@ -1542,9 +1542,9 @@
     try {
       if (act === 'dclose') $id('lcDlg').close();
       else if (act === 'log-copy') note(await copyLog() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
-      else if (act === 'crash-copy') note(await copyCrash() ? 'Отчёт скопирован' : 'Не удалось скопировать, выделите текст вручную');
+      else if (act === 'crash-copy') note(await copyCrash() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
       else if (act === 'crash-reveal') await call('crash:reveal');
-      else if (act === 'crash-ai') { if (await copyCrash()) note('Отчёт скопирован'); return; }   // ссылка откроется сама
+      else if (act === 'crash-ai') { if (await copyCrash()) note('Лог скопирован'); return; }   // ссылка откроется сама
       else if (act === 'tab') { S.accTab = b.dataset.tab; paintDlg(); }
       else if (act === 'set-tab') showSetTab(b.dataset.tab);
       else if (act === 'icon-pick') { const r = await call('inst:pickIcon', id); if (r) { await reloadInstances(); render(); paintDlg(); note('Аватарка обновлена'); } }
