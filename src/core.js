@@ -2613,8 +2613,150 @@ async function copyInstance(id, report, opts = {}) {
   }
 }
 
+/* ---------- экспорт экземпляра в .mrpack ----------
+   Файлы, найденные на Modrinth (по SHA-1), попадают в сборку ссылками; всё остальное (моды с CurseForge, свои файлы,
+   настройки) кладётся в overrides. Архив пишется потоком по одному файлу, поэтому большие сборки не съедают память. */
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+class ZipWriter {
+  constructor(handle) { this.h = handle; this.off = 0; this.cd = []; const d = new Date(); this.time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1); this.date = (Math.max(0, d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(); }
+  async add(name, data, store) {
+    if (data.length > 0x7FFFFFFF) throw new Error(`Файл слишком большой для сборки: ${name}`);
+    if (this.cd.length >= 65535) throw new Error('В сборке слишком много файлов (больше 65 535)');
+    const nameBuf = Buffer.from(name, 'utf8');
+    const packed = store || data.length < 64 ? data : require('zlib').deflateRawSync(data);
+    const method = packed === data ? 0 : 8;
+    const crc = crc32(data);
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(method, 8);
+    h.writeUInt16LE(this.time, 10); h.writeUInt16LE(this.date, 12); h.writeUInt32LE(crc, 14);
+    h.writeUInt32LE(packed.length, 18); h.writeUInt32LE(data.length, 22); h.writeUInt16LE(nameBuf.length, 26); h.writeUInt16LE(0, 28);
+    if (this.off + 30 + nameBuf.length + packed.length > 0xFFFFFFFF) throw new Error('Сборка получилась больше 4 ГБ, это не поддерживается');
+    await this.h.write(Buffer.concat([h, nameBuf]), 0, 30 + nameBuf.length, this.off);
+    await this.h.write(packed, 0, packed.length, this.off + 30 + nameBuf.length);
+    this.cd.push({ nameBuf, method, crc, csize: packed.length, size: data.length, off: this.off });
+    this.off += 30 + nameBuf.length + packed.length;
+  }
+  async finish() {
+    const parts = [];
+    for (const e of this.cd) {
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(0x0800, 8); c.writeUInt16LE(e.method, 10);
+      c.writeUInt16LE(this.time, 12); c.writeUInt16LE(this.date, 14); c.writeUInt32LE(e.crc, 16); c.writeUInt32LE(e.csize, 20); c.writeUInt32LE(e.size, 24);
+      c.writeUInt16LE(e.nameBuf.length, 28); c.writeUInt32LE(e.off, 42);
+      parts.push(c, e.nameBuf);
+    }
+    const cd = Buffer.concat(parts);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(this.cd.length, 8); end.writeUInt16LE(this.cd.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(this.off, 16);
+    await this.h.write(Buffer.concat([cd, end]), 0, cd.length + 22, this.off);
+  }
+}
+
+const EXPORT_ROOT_FILES = /^(options|optionsof|optionsshaders)\.txt$/i;
+const EXPORT_ROOT_DIRS = ['config', 'defaultconfigs', 'kubejs', 'scripts'];
+const EXPORT_LOADER_KEY = { fabric: 'fabric-loader', quilt: 'quilt-loader', forge: 'forge', neoforge: 'neoforge' };
+
+async function exportMrpack(id, dest, report, opts = {}) {
+  const inst = getInstance(id);
+  if (running.has(id)) throw new Error('Сначала закройте игру: файлы сейчас используются');
+  if (!dest || !/\.mrpack$/i.test(dest)) throw new Error('Файл сборки должен иметь расширение .mrpack');
+  const dir = instDir(id);
+  const withConfigs = opts.configs !== false;
+
+  // 1. содержимое: моды, ресурспаки, шейдеры (только файлы, выключенные моды пропускаются)
+  const content = [];   // { rel, abs, sha1 }
+  let disabled = 0;
+  for (const sub of ['mods', 'resourcepacks', 'shaderpacks']) {
+    let names = []; try { names = await fsp.readdir(path.join(dir, sub), { withFileTypes: true }); } catch { continue; }
+    for (const d of names) {
+      if (!d.isFile()) continue;
+      if (sub === 'mods' && d.name.endsWith('.jar' + DIS)) { disabled++; continue; }
+      if (!/\.(jar|zip)$/i.test(d.name)) continue;
+      content.push({ rel: `${sub}/${d.name}`, abs: path.join(dir, sub, d.name) });
+    }
+  }
+  report('Считаю контрольные суммы', 0.02);
+  let n = 0;
+  await pool(content, 4, async c => { c.sha1 = await sha1File(c.abs); report(`Считаю контрольные суммы: ${++n} из ${content.length}`, 0.02 + 0.28 * n / content.length); });
+
+  // 2. что из этого есть на Modrinth
+  const found = new Map();
+  let lookupFailed = false;
+  report('Ищу файлы на Modrinth', 0.32);
+  try {
+    const hashes = [...new Set(content.map(c => c.sha1))];
+    for (let i = 0; i < hashes.length; i += 200) {
+      checkCancel();
+      const res = await fetchJson(`${URLS.modrinth}/version_files`, {
+        method: 'POST', headers: { 'User-Agent': UA, Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hashes: hashes.slice(i, i + 200), algorithm: 'sha1' })
+      });
+      for (const [h, ver] of Object.entries(res || {})) {
+        const f = (ver.files || []).find(x => x.hashes && x.hashes.sha1 === h);
+        if (f && f.url && f.hashes.sha512) found.set(h, f);
+      }
+    }
+  } catch (e) { if (e && e.message === CANCELLED) throw e; lookupFailed = true; }
+
+  const files = [], bundled = [];
+  for (const c of content) {
+    const f = found.get(c.sha1);
+    if (f) files.push({ path: c.rel, hashes: { sha1: f.hashes.sha1, sha512: f.hashes.sha512 }, downloads: [f.url], fileSize: f.size });
+    else bundled.push(c);
+  }
+
+  // 3. настройки
+  const extra = [];
+  if (withConfigs) {
+    async function walk(rel) {
+      for (const d of await fsp.readdir(path.join(dir, rel), { withFileTypes: true })) {
+        const r = rel + '/' + d.name;
+        if (d.isDirectory()) await walk(r);
+        else if (d.isFile() && !/\.part$/i.test(d.name)) extra.push({ rel: r, abs: path.join(dir, r) });
+      }
+    }
+    for (const d of EXPORT_ROOT_DIRS) { try { await walk(d); } catch { /* папки нет */ } }
+    try { for (const d of await fsp.readdir(dir, { withFileTypes: true })) if (d.isFile() && EXPORT_ROOT_FILES.test(d.name)) extra.push({ rel: d.name, abs: path.join(dir, d.name) }); } catch { /* пусто */ }
+    try { for (const d of await fsp.readdir(path.join(dir, 'shaderpacks'), { withFileTypes: true })) if (d.isFile() && /\.txt$/i.test(d.name)) extra.push({ rel: 'shaderpacks/' + d.name, abs: path.join(dir, 'shaderpacks', d.name) }); } catch { /* пусто */ }
+  }
+
+  // 4. архив
+  const deps = { minecraft: inst.mc };
+  if (EXPORT_LOADER_KEY[inst.loader] && inst.loaderVersion) deps[EXPORT_LOADER_KEY[inst.loader]] = inst.loaderVersion;
+  const index = {
+    formatVersion: 1, game: 'minecraft', versionId: String(opts.version || '1.0.0').slice(0, 40), name: inst.name,
+    ...(opts.summary ? { summary: String(opts.summary).slice(0, 255) } : {}), files, dependencies: deps
+  };
+  const tmp = dest + '.part';
+  const fh = await fsp.open(tmp, 'w');
+  try {
+    const zip = new ZipWriter(fh);
+    await zip.add('modrinth.index.json', Buffer.from(JSON.stringify(index, null, 2), 'utf8'));
+    const all = [...bundled.map(c => ({ ...c, store: true })), ...extra];
+    let k = 0;
+    for (const it of all) {
+      checkCancel();
+      await zip.add('overrides/' + it.rel, await fsp.readFile(it.abs), it.store);
+      report(`Пакую: ${it.rel.split('/').pop()}`, 0.4 + 0.58 * (++k) / all.length);
+    }
+    await zip.finish();
+    await fh.close();
+    await fsp.rm(dest, { force: true });
+    await fsp.rename(tmp, dest);
+  } catch (e) {
+    await fh.close().catch(() => {});
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
+  const size = (await fsp.stat(dest)).size;
+  report('Готово', 1);
+  return { file: dest, size, linked: files.length, bundled: bundled.length, configs: extra.length, disabled, lookupFailed };
+}
+
 module.exports = {
-  checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
+  exportMrpack, checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
   installModFile, installResource, installResourceFile, listResources,
   init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,

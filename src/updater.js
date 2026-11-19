@@ -118,7 +118,8 @@ async function download(a, dest, signal) {
 const TMP_DIR = path.join(os.tmpdir(), 'matrixl-update');
 const PS_SCRIPT = `param([int]$OldPid,[string]$Installer,[string]$Exe,[string]$Log)
 function L($m){ try { Add-Content -LiteralPath $Log -Value ((Get-Date -Format 's') + ' ' + $m) -Encoding UTF8 } catch {} }
-L ('helper started, PowerShell ' + $PSVersionTable.PSVersion + ', old pid ' + $OldPid)
+$Dir = Split-Path -Parent $Exe
+L ('helper started, PowerShell ' + $PSVersionTable.PSVersion + ', old pid ' + $OldPid + ', exe ' + $Exe + ', installer ' + $Installer + ' (' + $(if (Test-Path -LiteralPath $Installer) { (Get-Item -LiteralPath $Installer).Length } else { 'MISSING' }) + ' bytes)')
 try { Wait-Process -Id $OldPid -Timeout 40 -ErrorAction Stop } catch {}
 try {
   $n = [IO.Path]::GetFileNameWithoutExtension($Exe)
@@ -129,7 +130,7 @@ $asar = Join-Path (Split-Path -Parent $Exe) 'resources\app.asar'
 function Stamp { if (Test-Path -LiteralPath $asar) { (Get-Item -LiteralPath $asar).LastWriteTimeUtc.Ticks } else { 0 } }
 $before = Stamp
 $code = -1
-try { $p = Start-Process -FilePath $Installer -ArgumentList '--updated','/S','--force-run' -PassThru -Wait; $code = $p.ExitCode } catch { L ('silent installer failed to start: ' + $_.Exception.Message) }
+try { $p = Start-Process -FilePath $Installer -ArgumentList '--updated','/S','--force-run',('/D=' + $Dir) -PassThru; $null = $p.Handle; $p.WaitForExit(); $code = $p.ExitCode } catch { L ('silent installer failed to start: ' + $_.Exception.Message) }
 L ('silent installer exit code: ' + $code)
 function WaitInstaller {
   try {
@@ -140,11 +141,12 @@ function WaitInstaller {
 WaitInstaller
 Start-Sleep -Seconds 2
 $after = Stamp
-$ok = ($code -eq 0) -and (($before -eq 0) -or ($before -ne $after))
+# успех: установщик завершился с кодом 0 (или app.asar реально заменился)
+$ok = ($code -eq 0) -or (($before -ne 0) -and ($before -ne $after))
 if ($ok) {
   L 'update applied'
 } else {
-  L ('silent install did not apply (app.asar changed: ' + ($before -ne $after) + '), opening the installer window')
+  L ('silent install did not apply (exit code ' + $code + ', app.asar changed: ' + ($before -ne $after) + ', asar ' + $asar + '), opening the installer window')
   try { Start-Process -FilePath $Installer -Wait; L 'installer window closed' } catch { L ('installer window failed: ' + $_.Exception.Message) }
   WaitInstaller
 }

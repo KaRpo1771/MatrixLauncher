@@ -1427,6 +1427,9 @@ dialog.lc-dlg[data-kind="crash"] .crash-log,dialog.lc-dlg[data-kind="crash"] .cr
 .jv-row em.ok{color:#4cc38a}.jv-row em.new{color:var(--accent)}
 .jv-row .jv-del{padding:3px 10px;font-size:12.5px;min-height:0}
 .jv-row .jv-del:disabled{opacity:.5;cursor:not-allowed}
+.jv-guide{margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:13.5px}
+.jv-guide ul{margin:6px 0 4px;padding-left:18px;display:grid;gap:3px}
+.jv-guide .filter-note{margin:6px 0 0}
 .jv-more{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 .jv-more summary{cursor:pointer;font-weight:600;font-size:14px;list-style:none}
 .jv-more summary::-webkit-details-marker{display:none}

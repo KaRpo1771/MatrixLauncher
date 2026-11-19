@@ -46,7 +46,7 @@ const PRES = {
   ru: {
     pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера' },
     viewing: { mod: 'Просмотр мода', plugin: 'Просмотр плагина', modpack: 'Просмотр сборки', resourcepack: 'Просмотр ресурспака', shader: 'Просмотр шейдера' }, author: a => `Автор: ${a}`,
-    tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра' },
+    tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
     inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
     favs: n => `${n} ${plural(n, 'карточка', 'карточки', 'карточек')} в избранном`,
     mods: n => `${n} ${plural(n, 'мод', 'мода', 'модов')}`
@@ -54,7 +54,7 @@ const PRES = {
   en: {
     pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher' },
     viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader' }, author: a => `By ${a}`,
-    tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance' },
+    tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance', export: 'Exporting a modpack' },
     inLauncher: 'In MatrixL launcher', playing: v => `Playing Minecraft ${v}`.trim(),
     favs: n => `${n} saved ${n === 1 ? 'card' : 'cards'}`,
     mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`
@@ -460,6 +460,18 @@ function registerIpc() {
     try {
       return await withTask('copy', () => core.startJob(() => core.copyInstance(id,
         (text, pct) => send('progress', { key, text, pct }), { suffix: o && o.suffix })));
+    } finally { release(); releaseKey(); }
+  });
+  handle('inst:exportPack', async (id, o) => {
+    const inst = core.getInstance(id);
+    const safe = String(inst.name).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || 'MatrixL';
+    const r = await dialog.showSaveDialog(win, { title: 'Экспорт сборки', defaultPath: path.join(app.getPath('documents'), safe + '.mrpack'), filters: [{ name: 'Сборка Modrinth (.mrpack)', extensions: ['mrpack'] }] });
+    if (r.canceled || !r.filePath) return null;
+    const key = 'create';
+    const releaseKey = lock(key), release = lock(id);
+    try {
+      return await withTask('export', () => core.startJob(() => core.exportMrpack(id, r.filePath,
+        (text, pct) => send('progress', { key, text, pct }), { configs: !(o && o.configs === false), version: o && o.version })));
     } finally { release(); releaseKey(); }
   });
   handle('mod:list', id => core.listMods(id));

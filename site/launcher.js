@@ -255,7 +255,7 @@
       if (p.text) pushLog(p.text);
       if (p.log) return;
       if (p.key === 'mod' && p.file) { dlUpdate(p); if (S.ofFile && p.file === S.ofFile) ofProgress(p); }
-      if (p.key === 'create') { if (!(S.packBusy && S.dlg && S.dlg.kind === 'settings')) setProgress('lcBar', 'lcStat', p.text, p.pct); setProgress('lcPackBar', 'lcPackStat', p.text, p.pct); setProgress('lcCopyBar', 'lcCopyStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
+      if (p.key === 'create') { if (!(S.packBusy && S.dlg && S.dlg.kind === 'settings')) setProgress('lcBar', 'lcStat', p.text, p.pct); setProgress('lcPackBar', 'lcPackStat', p.text, p.pct); setProgress('lcCopyBar', 'lcCopyStat', p.text, p.pct); setProgress('lcExportBar', 'lcExportStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
       else if (p.key === 'many') { setProgress('lcManyBar', 'lcManyStat', p.text, p.pct); taskProgress('task:mod', p.text, p.pct); }
       else if (p.key === 'mod') { setProgress('lcModBar', 'lcModStat', p.text, p.pct); if (p.text) taskProgress('task:mod', p.text, p.pct); }
       else if (p.key && p.key.startsWith('launch:')) setProgress('lcPlayBar', 'lcPlayStat', p.text, p.pct);
@@ -1101,20 +1101,19 @@
       </div>`;
 
     const files = `
-      <div class="lp-box">
-        <h4>Папки</h4>
-        <div class="lc-install">
-          <button class="btn" data-act="folder" data-id="${esc(i.id)}" type="button">Папка игры</button>
-          <button class="btn" data-act="mods-folder" data-id="${esc(i.id)}" type="button">Папка модов</button>
-          <button class="btn" data-act="shots-folder" data-id="${esc(i.id)}" type="button">Папка скриншотов</button>
-        </div>
-      </div>
       <div class="lp-box" id="lcCopy">
         <h4>Копия экземпляра</h4>
         <p class="filter-note">Создаёт новый экземпляр с теми же модами, настройками, мирами и скриншотами. Удобно, чтобы попробовать новые моды или обновление, не рискуя основной установкой. Игра должна быть закрыта.</p>
         <div class="lc-install"><button class="btn" data-act="inst-copy" data-id="${esc(i.id)}" type="button" ${i.running ? 'disabled' : ''}>Создать копию</button></div>
         <progress id="lcCopyBar" max="100" value="0" hidden style="width:100%"></progress>
         <p class="filter-note" id="lcCopyStat" role="status"></p>
+      </div>
+      <div class="lp-box" id="lcExport">
+        <h4>Экспорт в .mrpack</h4>
+        <p class="filter-note">Сохраняет экземпляр как сборку Modrinth: моды, ресурспаки и шейдеры, найденные на Modrinth, попадают в файл ссылками, остальное (например, моды с CurseForge) и настройки кладутся внутрь. Миры, скриншоты и аккаунты не экспортируются. Игра должна быть закрыта.</p>
+        <div class="lc-install"><button class="btn" data-act="inst-export" data-id="${esc(i.id)}" type="button" ${i.running ? 'disabled' : ''}>Экспортировать</button></div>
+        <progress id="lcExportBar" max="100" value="0" hidden style="width:100%"></progress>
+        <p class="filter-note" id="lcExportStat" role="status"></p>
       </div>
       <div class="lp-box danger-zone">
         <h4>Опасная зона</h4>
@@ -1374,6 +1373,32 @@
   }
 
   /* ---------------- копия экземпляра ---------------- */
+  async function runExport(id) {
+    const inst = S.instances.find(x => x.id === id);
+    if (!inst) return;
+    if (inst.running) { note('Сначала закройте игру'); return; }
+    if (S.packBusy || S.creating) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
+    S.packBusy = true;
+    const btns = document.querySelectorAll('#lcExport button');
+    btns.forEach(x => { x.disabled = true; });
+    try {
+      // имя файла спрашивает системное окно; если его закрыть, экспорт не начнётся
+      taskStart('task:create', `Экспорт «${inst.name}»`, 'подготовка сборки', { cancelTitle: 'Отменить экспорт?', cancelText: 'Недоделанный файл будет удалён.', cancelKeep: 'Продолжить экспорт' });
+      const eb = $id('lcExportBar'); if (eb) { eb.hidden = false; eb.value = 0; }
+      const r = await call('inst:exportPack', id, {});
+      if (!r) { taskCancelled('task:create'); if (eb) eb.hidden = true; return; }
+      const mb = (r.size / 1048576).toFixed(1);
+      taskEnd('task:create', true, `Готово: ${mb} МБ`);
+      const st = $id('lcExportStat');
+      if (st) st.textContent = `Готово: ${r.file} (${mb} МБ). Ссылками: ${r.linked}, внутри файла: ${r.bundled} модов и ресурсов, ${r.configs} файлов настроек.` + (r.lookupFailed ? ' Modrinth не ответил, поэтому всё положено внутрь файла.' : '') + (r.disabled ? ` Выключенных модов пропущено: ${r.disabled}.` : '');
+      note('Сборка экспортирована');
+    } catch (ex) {
+      if (isCancel(ex)) { taskCancelled('task:create'); note('Экспорт отменён'); }
+      else { taskEnd('task:create', false, ex.message); note(ex.message); }
+      const eb2 = $id('lcExportBar'); if (eb2) eb2.hidden = true;
+    } finally { S.packBusy = false; document.querySelectorAll('#lcExport button').forEach(x => { x.disabled = false; }); }
+  }
+
   async function runCopy(id) {
     const inst = S.instances.find(x => x.id === id);
     if (!inst) return;
@@ -1531,6 +1556,7 @@
       else if (act === 'pack-check') await loadPackUpdate(id, true);
       else if (act === 'pack-upd-go') await runPackUpd(id);
       else if (act === 'inst-copy') await runCopy(id);
+      else if (act === 'inst-export') await runExport(id);
       else if (act === 'pack-file') installPackFile();
       else if (act === 'bg-pick') { const r = await call('inst:pickBg', id); if (r) { await reloadInstances(); S.shotsLoaded = false; render(); paintDlg(); note('Фон установлен'); } }
       else if (act === 'bg-clear') { await call('inst:clearBg', id); await reloadInstances(); S.shotsLoaded = false; render(); paintDlg(); }
@@ -1947,7 +1973,7 @@
         try { mods = await call('mod:list', sel.value); } catch (e) { /* без списка */ }
         if (!$id('lcMiSel') || $id('lcMiSel').value !== sel.value) return;
         const hasEngine = mods.some(x => SHADER_ENGINE_RE.test(`${x.file} ${x.title} ${x.slug}`));
-        if (!hasEngine) warns.push(`Шейдер не заработает: в установке «${inst.name}» нет Iris, Oculus или OptiFine. Для Fabric, Quilt и NeoForge поставьте мод Iris из раздела «Моды», для Forge OptiFine ставится при создании экземпляра.`);
+        if (!hasEngine) warns.push(`Шейдер не заработает: в установке «${inst.name}» нет Iris, Canvas, Oculus или OptiFine. Для Fabric, Quilt и NeoForge поставьте мод Iris из раздела «Моды», для Forge OptiFine ставится при создании экземпляра.`);
       }
       box.innerHTML = warns.map(t => `<p class="filter-note">⚠ ${esc(t)}</p>`).join('');
     };

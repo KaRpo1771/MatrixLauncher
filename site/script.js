@@ -11,7 +11,7 @@ const LOADER_LABEL = {fabric:"Fabric",forge:"Forge",neoforge:"NeoForge",quilt:"Q
 const SHADER_ENGINES = ["iris","oculus","optifine","canvas","vanilla"];
 const RES_KINDS = ["resourcepack","shader"];
 /* значок загрузчика (файлы лежат в site/loaders/<id>.png); если файла нет, просто пропадает */
-const ICON_IDS = [...LOADER_IDS, "iris","oculus","optifine"];
+const ICON_IDS = [...LOADER_IDS, "iris","oculus","optifine","canvas"];
 const ldIcon = l => ICON_IDS.includes(l) ? `<img class="ld-ico" src="loaders/${l}.png" alt="" width="14" height="14" onerror="this.remove()">` : "";
 const CAT_LABEL = {
   adventure:"Приключения", decoration:"Декор", economy:"Экономика", equipment:"Снаряжение",
@@ -980,11 +980,11 @@ const CATALOG_DEF = {
     categories:CAT_LABEL, showLoaders:true, showSource:false, versionServerSide:true},
   modpacks: {title:"Сборки", lede:"Готовые сборки модов. Устанавливаются в лаунчер одной кнопкой.", keys:c=>[c.src||"modrinth"], projectType:"modpack", kind:"modpack", srcChoice:true,
     categories:MODPACK_CAT_LABEL, showLoaders:true, showSource:false, versionServerSide:true},
-  resourcepacks: {title:"Ресурспаки", lede:"Текстуры, звуки и шрифты с Modrinth и CurseForge в одном списке. Ресурспак ставится в папку resourcepacks выбранного экземпляра, загрузчик модов не нужен.",
+  resourcepacks: {title:"Ресурспаки", lede:"Текстуры, звуки и шрифты с Modrinth и CurseForge в одном списке. Ресурспак ставится в папку resourcepacks выбранного экземпляра",
     keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
     projectType:"resourcepack", kind:"resourcepack", allSources:true, dynamicCats:true,
     categories:RESPACK_CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
-  shaders: {title:"Шейдеры", lede:"Шейдеры с Modrinth и CurseForge в одном списке. Ставятся в папку shaderpacks, а запускает их Iris (Fabric, Quilt, NeoForge), Oculus (Forge) или OptiFine (Forge).",
+  shaders: {title:"Шейдеры", lede:"Шейдеры с Modrinth и CurseForge в одном списке. Ставятся в папку shaderpacks, а запускает их Iris (Fabric, Quilt, NeoForge), Canvas (Fabric), Oculus (Forge) или OptiFine (Forge)",
     keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
     projectType:"shader", kind:"shader", allSources:true, dynamicCats:true,
     categories:SHADER_CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
@@ -1686,6 +1686,17 @@ function renderSettingsPage(){
         <details class="jv-more" id="jvMore">
           <summary>Скачать другие версии Java</summary>
           <p class="filter-note">Лаунчер сам докачивает нужную Java при запуске игры. Здесь можно заранее скачать любые версии, например Java 8 для старых сборок или Java 21 для новых.</p>
+          <div class="jv-guide">
+            <b>Какую Java выбрать</b>
+            <ul>
+              <li><b>Java 25</b>: Minecraft 26.1 и новее</li>
+              <li><b>Java 21</b>: Minecraft 1.20.5 – 1.21.x</li>
+              <li><b>Java 17</b>: Minecraft 1.18 – 1.20.4</li>
+              <li><b>Java 16</b>: Minecraft 1.17</li>
+              <li><b>Java 8</b>: Minecraft 1.16.5 и старше, а также многие старые сборки</li>
+            </ul>
+            <p class="filter-note">Если не уверены, ничего не скачивайте: лаунчер сам возьмёт нужную Java при запуске игры.</p>
+          </div>
           <div class="jv-pick" id="jvPick">Загружаю список…</div>
           <div class="upd-actions">
             <button type="button" class="btn" id="jvGet" disabled>Скачать выбранные</button>
