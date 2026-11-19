@@ -1465,15 +1465,13 @@ dialog.lc-dlg[data-kind="dcopts"] .m-body{gap:14px;max-height:calc(100vh - 190px
 .dc-row small{font-size:12.5px;color:var(--muted);line-height:1.35}
 
 /* ============================================================
-   Красный крестик отмены обновления
+   Красная кнопка «Отмена» на панели обновления
    ============================================================ */
-.upd-x{flex:none;display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid color-mix(in srgb,var(--redstone) 55%,transparent);border-radius:50%;
-  background:color-mix(in srgb,var(--redstone) 14%,transparent);color:var(--redstone);cursor:pointer;transition:background .15s,color .15s,transform .15s,border-color .15s}
-.upd-x svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.6;stroke-linecap:round}
-.upd-x:hover{background:var(--redstone);border-color:var(--redstone);color:#fff;transform:scale(1.08)}
-.upd-x:active{transform:scale(.94)}
+.upd-x{flex:none;padding:7px 14px;font-size:13.5px;border:1px solid color-mix(in srgb,var(--redstone) 55%,transparent);border-radius:var(--radius);
+  background:color-mix(in srgb,var(--redstone) 14%,transparent);color:var(--redstone);cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.upd-x:hover{background:var(--redstone);border-color:var(--redstone);color:#fff}
 .upd-x:focus-visible{outline:2px solid var(--redstone);outline-offset:2px}
-.upd-x:disabled{opacity:.5;cursor:default;transform:none}
+.upd-x:disabled{opacity:.5;cursor:default}
 .upd-x[hidden]{display:none!important}
 
 /* ============================================================
@@ -1612,12 +1610,14 @@ dialog.lc-dlg[data-kind="settings"] .m-body{flex:1;min-height:0;max-height:none;
 .srv-off .srv-badge{color:var(--redstone)}.srv-off .srv-badge i{background:var(--redstone)}
 .srv-wait .srv-badge i{animation:srvPulse 1s ease-in-out infinite}
 @keyframes srvPulse{50%{opacity:.3}}
-.srv-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.srv-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.srv-stat-ver{grid-column:1 / -1}
 .srv-stat{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);min-width:0}
 .srv-stat small{display:block;color:var(--muted);font-size:11.5px;margin-bottom:2px}
 .srv-stat b{font-family:"Space Grotesk",sans-serif;font-size:17px}
 .srv-stat b i{font-style:normal;font-size:12.5px;font-weight:500;color:var(--muted)}
-.srv-stat b.srv-ver{font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srv-stat b.srv-ver{font-size:13px;display:block;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+#srvAuto[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .srv-bar{height:6px;border-radius:99px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
 .srv-bar span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .4s}
 .srv-motd{margin:0;color:var(--muted);font-size:13.5px;white-space:pre-line;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -1626,3 +1626,10 @@ dialog.lc-dlg[data-kind="settings"] .m-body{flex:1;min-height:0;max-height:none;
 .srv-foot{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:auto}
 .srv-foot .btn{padding:6px 12px;font-size:10px}
 .srv-at{flex:1 1 100%;color:var(--muted);font-size:12px;font-family:"IBM Plex Mono",monospace}
+
+/* верхнее меню: все кнопки одной высоты, текст и иконка по центру;
+   пустой счётчик «Избранного» больше не занимает место и не сдвигает текст */
+.nav-count:empty{display:none}
+.topbar .nav{align-items:stretch}
+.topbar .nav-item{justify-content:center;min-height:40px;line-height:1.2}
+.topbar .nav-item .nav-count{margin-left:0}

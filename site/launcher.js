@@ -279,7 +279,11 @@
     // новая версия лаунчера: уведомление и точка у «Настроек», обновляется кнопкой в настройках
     mm.on('update-state', onUpdateState);
     const ub = $id('updBtn'); if (ub) ub.onclick = updateClick;
-    const uc = $id('updCancel'); if (uc) uc.onclick = async () => { uc.disabled = true; try { await call('update:cancel'); } catch (ex) { note(ex.message); } uc.disabled = false; };
+    const uc = $id('updCancel'); if (uc) uc.onclick = async () => {
+      const yes = await ask({ title: 'Отменить обновление?', text: 'Скачивание обновления будет остановлено, лаунчер останется на текущей версии.', ok: 'Отменить обновление', cancel: 'Продолжить', danger: true });
+      if (!yes || !S.upd || S.upd.phase !== 'downloading') return;
+      uc.disabled = true; try { await call('update:cancel'); } catch (ex) { note(ex.message); } uc.disabled = false;
+    };
     call('update:state').then(onUpdateState).catch(() => {});
     mm.on('ms-result', r => {
       S.ms = null;
@@ -325,6 +329,7 @@
   async function updateClick() {
     const u = S.upd; if (!u) return;
     if (!u.canInstall && u.url) { window.open(u.url, '_blank'); return; }
+    if (u.phase === 'available' && u.canInstall && !await ask({ title: 'Обновить лаунчер?', text: `Лаунчер скачает версию v${u.latest}, закроется и сам запустится уже на новой версии. Ваши аккаунты и экземпляры останутся на месте.`, ok: 'Обновить' })) return;
     try { await call('update:install'); } catch (ex) { note(ex.message); }
   }
   function afterAccountsChange() {

@@ -44,7 +44,7 @@ const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: '
    Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
 const PRES = {
   ru: {
-    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера', servers: 'Просмотр серверов' },
+    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
     viewing: { mod: 'Просмотр мода', plugin: 'Просмотр плагина', modpack: 'Просмотр сборки', resourcepack: 'Просмотр ресурспака', shader: 'Просмотр шейдера' }, author: a => `Автор: ${a}`,
     tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
     inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
@@ -52,7 +52,7 @@ const PRES = {
     mods: n => `${n} ${plural(n, 'мод', 'мода', 'модов')}`
   },
   en: {
-    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher', servers: 'Checking servers' },
+    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher', servers: 'Monitoring servers' },
     viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader' }, author: a => `By ${a}`,
     tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance', export: 'Exporting a modpack' },
     inLauncher: 'In MatrixL launcher', playing: v => `Playing Minecraft ${v}`.trim(),

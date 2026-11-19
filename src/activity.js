@@ -139,6 +139,9 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   const LOADERS = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
   const largeText = inst && mc
     ? `${LOADERS[inst.loader] || 'Minecraft'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : 'MatrixL';
+  // «Forge 1.12.2 (89 модов)», для чистой игры «Vanilla 1.20.1»: показывается на сервере рядом со статусом
+  const verLabel = inst && mc
+    ? `${inst.loader && inst.loader !== 'vanilla' ? (LOADERS[inst.loader] || inst.loader) : 'Vanilla'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : '';
   if (!live || live.mode === 'menu' || !live.mode) {
     return { details: T.playing(mc), state: o.showAfk && live && live.afk ? T.afkMenu : T.mainMenu, largeText };
   }
@@ -148,7 +151,9 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
     const name = o.showHost ? live.host : (srv.name || '');
     const details = name ? T.onServerHost(name) : T.onServer;
     const st = statusLabel(null, live, o, now, lang);
-    const out = { details, state: st || T.multi, largeText };
+    // у Discord всего две строки под названием, поэтому версия и загрузчик идут в строку состояния перед «Мультиплеер»
+    const state = [verLabel, st || T.multi].filter(Boolean).join(' · ');
+    const out = { details, state, largeText };
     // «(12 из 100)» рядом со строкой состояния: Discord рисует это сам из party.size
     if (o.showHost && o.showPlayers && Number.isFinite(srv.online) && Number.isFinite(srv.max) && srv.max > 0) out.party = [Math.max(0, srv.online), Math.max(srv.max, srv.online)];
     return out;

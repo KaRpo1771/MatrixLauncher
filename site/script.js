@@ -1672,6 +1672,7 @@ function renderSettingsPage(){
         <pre class="upd-notes" id="upNotes" hidden></pre>
         <div class="upd-actions">
           <button type="button" class="btn primary" id="upBtn" disabled>Проверить обновления</button>
+          <button type="button" class="btn upd-x" id="upCancel" hidden>Отмена</button>
           <a class="btn" id="upLink" target="_blank" rel="noopener" hidden>Страница релиза ↗</a>
         </div>
       </div>` : ""}
@@ -1901,6 +1902,7 @@ function renderSettingsPage(){
       if(st.phase === "available" && st.error) text += " " + st.error;
       $("upStat").textContent = text;
       btn.textContent = label; btn.disabled = !canClick;
+      const cn = $("upCancel"); if(cn){ cn.hidden = st.phase !== "downloading"; cn.disabled = false; }
       bar.hidden = !showBar; bar.value = st.pct || 0;
       const showNotes = st.phase === "available" && st.notes;
       notes.hidden = !showNotes; notes.textContent = showNotes ? st.notes : "";
@@ -1908,6 +1910,12 @@ function renderSettingsPage(){
     };
     window.__updOff = mm.on("update-state", paint);
     mm.invoke("update:state").then(r=>{ if(r.ok) paint(r.data); });
+    $("upCancel").addEventListener("click", async ()=>{
+      if(!await window.UI.confirm({title:"Отменить обновление?", text:"Скачивание обновления будет остановлено, лаунчер останется на текущей версии.", ok:"Отменить обновление", cancel:"Продолжить", danger:true})) return;
+      if(U.st.phase !== "downloading") return;
+      $("upCancel").disabled = true;
+      await mm.invoke("update:cancel");
+    });
     $("upBtn").addEventListener("click", async ()=>{
       if(U.st.phase === "available" && U.st.canInstall){
         if(!await window.UI.confirm({title:"Обновить лаунчер?", text:`Лаунчер скачает версию v${U.st.latest}, закроется и сам запустится уже на новой версии. Ваши аккаунты и экземпляры останутся на месте.`, ok:"Обновить"})) return;
@@ -1988,7 +1996,7 @@ async function openDiscordOptions(){
    Список хранится на этом компьютере; запросы идут из приложения
    тем же способом, что и список серверов в самой игре.
    ============================================================ */
-const SRV_KEY = "matrixl:servers", SRV_MAX = 30, SRV_EVERY = 30000;
+const SRV_KEY = "matrixl:servers", SRV_AUTO_KEY = "matrixl:servers:auto", SRV_MAX = 30, SRV_EVERY = 30000;
 const srvEn = ()=> window.I18N && window.I18N.lang() === "en";
 const srvState = { list: [], res: new Map(), busy: new Set(), timer: 0 };
 
@@ -1997,6 +2005,17 @@ function srvLoad(){
     const p = JSON.parse(localStorage.getItem(SRV_KEY) || "[]");
     srvState.list = Array.isArray(p) ? p.filter(x=> x && x.id && typeof x.addr === "string").slice(0, SRV_MAX) : [];
   }catch(e){ srvState.list = []; }
+}
+function srvAutoOn(){ try{ return localStorage.getItem(SRV_AUTO_KEY) !== "0"; }catch(e){ return true; } }
+function srvAutoSet(on){ try{ localStorage.setItem(SRV_AUTO_KEY, on ? "1" : "0"); }catch(e){} }
+function srvStopTimer(){ clearInterval(srvState.timer); srvState.timer = 0; }
+function srvStartTimer(){
+  srvStopTimer();
+  if(!srvAutoOn()) return;
+  srvState.timer = setInterval(()=>{
+    if(state.page !== "servers"){ srvStopTimer(); return; }
+    if(!document.hidden) srvCheckAll();
+  }, SRV_EVERY);
 }
 function srvSave(){ try{ localStorage.setItem(SRV_KEY, JSON.stringify(srvState.list)); }catch(e){} }
 function srvNorm(raw){
@@ -2023,7 +2042,7 @@ function srvCardHtml(s){
       <div class="srv-stats">
         <div class="srv-stat"${names}><small>Игроки</small><b>${r.players} <i>${srvEn() ? "of" : "из"} ${r.max}</i></b></div>
         <div class="srv-stat"><small>Задержка</small><b>${r.latency} <i>мс</i></b></div>
-        <div class="srv-stat"><small>Версия</small><b class="srv-ver">${safe(r.version || "-")}</b></div>
+        <div class="srv-stat srv-stat-ver" title="${safe(r.version || "")}"><small>Версия</small><b class="srv-ver">${safe(r.version || "-")}</b></div>
       </div>
       <div class="srv-bar" role="progressbar" aria-label="Заполненность сервера" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${ratio}"><span style="width:${ratio}%"></span></div>
       ${r.motd ? `<p class="srv-motd">${safe(r.motd)}</p>` : ""}
@@ -2082,29 +2101,28 @@ function srvPaint(id){
 function srvSummary(){
   const el = $("srvCount"); if(!el) return;
   const on = srvState.list.filter(s=> (srvState.res.get(s.id)||{}).online).length;
-  const ply = srvState.list.reduce((n,s)=>{ const r = srvState.res.get(s.id); return n + (r && r.online ? r.players : 0); }, 0);
   el.textContent = !srvState.list.length ? (srvEn() ? "No servers yet" : "Серверов пока нет")
-    : srvEn() ? `Online: ${on} of ${srvState.list.length}, total players: ${ply}` : `Онлайн: ${on} из ${srvState.list.length}, игроков всего: ${ply}`;
+    : srvEn() ? `Online: ${on} of ${srvState.list.length}` : `Онлайн: ${on} из ${srvState.list.length}`;
 }
 
 function renderServersPage(){
   clearInterval(srvState.timer); srvState.timer = 0;
   const content = $("content");
   if(!window.mm){
-    content.innerHTML = `<h1>Серверы</h1><div class="state">Проверка серверов работает только в приложении MatrixL.</div>`;
+    content.innerHTML = `<h1>Мониторинг</h1><div class="state">Проверка серверов работает только в приложении MatrixL.</div>`;
     return;
   }
   srvLoad();
   content.innerHTML = `
-    <h1>Серверы</h1>
-    <p class="page-lede">Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд.</p>
+    <h1>Мониторинг</h1>
+    <p class="page-lede">Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд, автообновление можно отключить.</p>
     <form class="srv-add" id="srvAdd" autocomplete="off">
       <label class="field"><span>Адрес сервера</span><input type="text" id="srvAddr" maxlength="280" placeholder="play.example.net или 123.45.67.89:25565" spellcheck="false" aria-label="Адрес сервера"></label>
       <label class="field"><span>Название (необязательно)</span><input type="text" id="srvName" maxlength="40" placeholder="Мой сервер" aria-label="Название сервера"></label>
       <button class="btn primary" type="submit">＋ Добавить сервер</button>
     </form>
     <div class="meta-row"><div class="count" id="srvCount"></div>
-      <div class="meta-right"><button class="btn" type="button" id="srvRefresh">Обновить все</button></div>
+      <div class="meta-right"><button class="btn" type="button" id="srvAuto" aria-pressed="true"></button><button class="btn" type="button" id="srvRefresh">Обновить все</button></div>
     </div>
     <div class="srv-grid" id="srvGrid"></div>`;
   const grid = $("srvGrid");
@@ -2129,6 +2147,10 @@ function renderServersPage(){
     draw(); srvCheck(id);
   });
   $("srvRefresh").addEventListener("click", srvCheckAll);
+  const autoBtn = $("srvAuto");
+  const paintAuto = ()=>{ const on = srvAutoOn(); autoBtn.setAttribute("aria-pressed", on ? "true" : "false"); autoBtn.textContent = on ? "Автообновление: вкл" : "Автообновление: выкл"; };
+  paintAuto();
+  autoBtn.addEventListener("click", ()=>{ srvAutoSet(!srvAutoOn()); paintAuto(); srvStartTimer(); });
   grid.addEventListener("click", e=>{
     const b = e.target.closest("button[data-act]"); if(!b) return;
     const id = b.closest(".srv-card").dataset.id, s = srvState.list.find(x=> x.id === id); if(!s) return;
@@ -2142,16 +2164,13 @@ function renderServersPage(){
   });
 
   srvCheckAll();
-  srvState.timer = setInterval(()=>{
-    if(state.page !== "servers"){ clearInterval(srvState.timer); srvState.timer = 0; return; }
-    if(!document.hidden) srvCheckAll();
-  }, SRV_EVERY);
+  srvStartTimer();
 }
 
 /* ============================================================
    Навигация и каркас
    ============================================================ */
-const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки", servers:"Серверы"};
+const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки", servers:"Мониторинг"};
 
 function setPage(page, opts){
   state.page = page;

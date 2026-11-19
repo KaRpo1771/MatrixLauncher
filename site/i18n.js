@@ -760,6 +760,8 @@
     "Не удалось обновить": "Update failed",
     "Устанавливаю обновление": "Installing update",
     "Отменить обновление": "Cancel update",
+    "Отмена": "Cancel",
+    "Скачивание обновления будет остановлено, лаунчер останется на текущей версии.": "The update download will be stopped and the launcher will stay on the current version.",
     "Лаунчер сейчас перезапустится": "The launcher will restart now",
     "Скачать": "Download"
   });
@@ -1085,14 +1087,16 @@
   });
 
   Object.assign(D, {
-    "Серверы": "Servers",
-    "Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд.": "Add a Minecraft server address and the launcher will show whether it is up, how many players are online and its latency. Data refreshes automatically every 30 seconds.",
+    "Мониторинг": "Monitoring",
+    "Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд, автообновление можно отключить.": "Add a Minecraft server address and the launcher will show whether it is up, how many players are online and its latency. Data refreshes automatically every 30 seconds, and auto-refresh can be turned off.",
     "Адрес сервера": "Server address",
     "Название (необязательно)": "Name (optional)",
     "Мой сервер": "My server",
     "play.example.net или 123.45.67.89:25565": "play.example.net or 123.45.67.89:25565",
     "＋ Добавить сервер": "＋ Add server",
     "Обновить все": "Refresh all",
+    "Автообновление: вкл": "Auto-refresh: on",
+    "Автообновление: выкл": "Auto-refresh: off",
     "Серверов пока нет": "No servers yet",
     "Здесь пока пусто. Введите адрес сервера выше, например": "It's empty here. Enter a server address above, for example",
     "(порт указывать нужно только если он не 25565).": "(specify the port only if it is not 25565).",
@@ -1117,7 +1121,7 @@
     "Введите адрес сервера": "Enter a server address",
     "Этот сервер уже в списке": "This server is already in the list",
     "Название сервера": "Server name",
-    "Просмотр серверов": "Checking servers",
+    "Мониторинг серверов": "Monitoring servers",
     "мс": "ms"
   });
 

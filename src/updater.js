@@ -3,8 +3,8 @@
    Обновление лаунчера через GitHub Releases.
    • проверка: последний релиз репозитория из package.json (поле repository, по умолчанию KaRpo1771/MatrixLauncher);
    • установка: скачивается MatrixL-Setup-*.exe, проверяется размер и SHA-256 (если GitHub его отдал).
-     Лаунчер закрывается, а маленький скрипт PowerShell ждёт его выхода, ставит обновление тихо,
-     дожидается конца установки и только потом открывает уже новую версию;
+     Лаунчер закрывается, а установщик (запущенный как у electron-updater: --updated /S --force-run /D=папка)
+     сам дожидается его выхода, тихо ставит обновление и открывает уже новую версию;
    • если после перезапуска версия не поменялась, лаунчер сообщает об этом (подробности в update.log);
    • портативная версия (MatrixL-portable.exe) сама себя заменить не может,
      для неё открывается страница релиза.
@@ -116,71 +116,46 @@ async function download(a, dest, signal) {
 }
 
 const TMP_DIR = path.join(os.tmpdir(), 'matrixl-update');
-const PS_SCRIPT = `param([int]$OldPid,[string]$Installer,[string]$Exe,[string]$Log)
-function L($m){ try { Add-Content -LiteralPath $Log -Value ((Get-Date -Format 's') + ' ' + $m) -Encoding UTF8 } catch {} }
-$Dir = Split-Path -Parent $Exe
-L ('helper started, PowerShell ' + $PSVersionTable.PSVersion + ', old pid ' + $OldPid + ', exe ' + $Exe + ', installer ' + $Installer + ' (' + $(if (Test-Path -LiteralPath $Installer) { (Get-Item -LiteralPath $Installer).Length } else { 'MISSING' }) + ' bytes)')
-try { Wait-Process -Id $OldPid -Timeout 40 -ErrorAction Stop } catch {}
-try {
-  $n = [IO.Path]::GetFileNameWithoutExtension($Exe)
-  Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Exe } | Stop-Process -Force -ErrorAction SilentlyContinue
-} catch {}
-Start-Sleep -Seconds 2
-$asar = Join-Path (Split-Path -Parent $Exe) 'resources\app.asar'
-function Stamp { if (Test-Path -LiteralPath $asar) { (Get-Item -LiteralPath $asar).LastWriteTimeUtc.Ticks } else { 0 } }
-$before = Stamp
-$code = -1
-try { $p = Start-Process -FilePath $Installer -ArgumentList '--updated','/S','--force-run',('/D=' + $Dir) -PassThru; $null = $p.Handle; $p.WaitForExit(); $code = $p.ExitCode } catch { L ('silent installer failed to start: ' + $_.Exception.Message) }
-L ('silent installer exit code: ' + $code)
-function WaitInstaller {
-  try {
-    $i = [IO.Path]::GetFileNameWithoutExtension($Installer)
-    Get-Process -Name $i -ErrorAction SilentlyContinue | Wait-Process -Timeout 180 -ErrorAction SilentlyContinue
-  } catch {}
-}
-WaitInstaller
-Start-Sleep -Seconds 2
-$after = Stamp
-# успех: установщик завершился с кодом 0 (или app.asar реально заменился)
-$ok = ($code -eq 0) -or (($before -ne 0) -and ($before -ne $after))
-if ($ok) {
-  L 'update applied'
-} else {
-  L ('silent install did not apply (exit code ' + $code + ', app.asar changed: ' + ($before -ne $after) + ', asar ' + $asar + '), opening the installer window')
-  try { Start-Process -FilePath $Installer -Wait; L 'installer window closed' } catch { L ('installer window failed: ' + $_.Exception.Message) }
-  WaitInstaller
-}
-if (Test-Path -LiteralPath $Exe) {
-  try { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe); L 'launcher started' } catch { L ('launcher start failed: ' + $_.Exception.Message) }
-} else { L ('launcher not found: ' + $Exe) }
-if ($ok) { try { Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue } catch {} }
-`;
 
 const pendingFile = () => hooks.dataDir ? path.join(hooks.dataDir, 'update-pending.json') : '';
 const logFile = () => hooks.dataDir ? path.join(hooks.dataDir, 'update.log') : path.join(TMP_DIR, 'update.log');
 
-/* Запуск установщика отдельным процессом: лаунчер к этому моменту уже закрыт (его PID ждёт скрипт),
-   поэтому установщик не упирается в запущенный MatrixL.exe, а новая версия открывается строго после установки. */
+/* Запуск установщика отдельным процессом без PowerShell и скриптов (скрытый powershell -ExecutionPolicy Bypass часто
+   блокируют антивирусы и политики, и тогда установщик не запускался вовсе, а лаунчер не открывался).
+   Как и у electron-updater, установщик получает «--updated /S --force-run /D=папка»: он сам дожидается выхода лаунчера,
+   тихо заменяет файлы и запускает новую версию. Короткая цепочка cmd.exe только пишет код завершения в update.log
+   и открывает лаунчер ещё раз (второй экземпляр сразу закроется, если новая версия уже запущена установщиком),
+   так что при любом исходе лаунчер не остаётся закрытым. */
 function launchInstaller(dir, file, target) {
-  const script = path.join(dir, 'update.ps1');
   const log = logFile();
   const note = m => { try { fs.appendFileSync(log, `${new Date().toISOString()} ${m}\n`, 'utf8'); } catch { /* не критично */ } };
-  fs.writeFileSync(script, '\uFEFF' + PS_SCRIPT, 'utf8');
   fs.writeFileSync(log, `${new Date().toISOString()} update ${hooks.current()} -> ${target}\n`, 'utf8');
   if (pendingFile()) fs.writeFileSync(pendingFile(), JSON.stringify({ from: hooks.current(), target }), 'utf8');
-  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script,
-    '-OldPid', String(process.pid), '-Installer', file, '-Exe', process.execPath, '-Log', log];
+  const exe = process.execPath, installDir = path.dirname(exe);
+  let size = -1; try { size = fs.statSync(file).size; } catch { /* нет файла */ }
+  note(`exe ${exe}, installer ${file} (${size} bytes), install dir ${installDir}`);
+  const q = x => `"${x}"`;
+  const iargs = ['--updated', '/S', '--force-run', `/D=${installDir}`].join(' ');
+  // «!» и «%» в путях ломают отложенное раскрытие переменных cmd, тогда код завершения не пишем
+  const canLog = ![file, exe, log].some(x => /[!%^]/.test(x));
+  const chain = [
+    `start "" /wait ${q(file)} ${iargs}`,
+    canLog ? `echo %date% %time% installer exit code: !errorlevel!>>${q(log)}` : '',
+    `start "" ${q(exe)}`
+  ].filter(Boolean).join(' & ');
+  const direct = () => {
+    try { const c = spawn(file, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' }); c.on('error', () => {}); c.unref(); } catch (e2) { note('installer failed: ' + e2.message); }
+  };
   return new Promise(resolve => {
     let done = false;
     const fin = () => { if (!done) { done = true; resolve(); } };
-    const child = spawn('powershell.exe', args, { detached: true, stdio: 'ignore', windowsHide: true });
-    child.once('spawn', () => { child.unref(); note('powershell started, pid ' + child.pid); fin(); });
-    child.once('error', e => {
-      // PowerShell недоступен (например, запрещён политикой): запасной путь, обычное окно установщика
-      note('powershell failed: ' + e.message + '; opening the installer window');
-      try { const c = spawn(file, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' }); c.on('error', () => {}); c.unref(); } catch (e2) { note('installer failed: ' + e2.message); }
-      fin();
-    });
+    let child;
+    try {
+      child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/v:on', '/s', '/c', `"${chain}"`],
+        { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, cwd: dir });
+    } catch (e) { note('cmd failed: ' + e.message + '; opening the installer window'); direct(); fin(); return; }
+    child.once('spawn', () => { child.unref(); note('installer chain started, pid ' + child.pid); fin(); });
+    child.once('error', e => { note('cmd failed: ' + e.message + '; opening the installer window'); direct(); fin(); });
     setTimeout(fin, 3000);
   });
 }

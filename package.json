@@ -1,6 +1,6 @@
 {
   "name": "modmatrix-launcher",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "MatrixL, лаунчер Minecraft с каталогом модов",
   "main": "src/main.js",
   "author": "MatrixL",
