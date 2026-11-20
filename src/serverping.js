@@ -55,7 +55,9 @@ function ping(host, port = 25565, timeout = 4000) {
         const j = JSON.parse(buf.toString('utf8', o, o + sl.value));
         const pl = j && j.players;
         if (!pl || !Number.isFinite(pl.online) || !Number.isFinite(pl.max)) return finish(new Error('no players'));
-        finish(null, { online: pl.online, max: pl.max, version: j.version && j.version.name ? String(j.version.name) : '' });
+        // своя иконка у сервера есть, если он прислал favicon (иначе публичный сервис отдал бы картинку по умолчанию)
+        const hasIcon = typeof j.favicon === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/=]{100,}$/.test(j.favicon);
+        finish(null, { online: pl.online, max: pl.max, hasIcon, version: j.version && j.version.name ? String(j.version.name) : '' });
       } catch (e) { finish(e); }
     });
   });
@@ -190,4 +192,15 @@ function splitHost(h) {
   return { host: m[1], port: m[2] ? Number(m[2]) : 25565 };
 }
 
-module.exports = { ping, status, parseAddress, savedName, splitHost, _t: { varint, pack } };
+/* Адрес иконки сервера для Discord. Discord принимает только https-ссылку (до 256 символов), а favicon сервера приходит
+   как данные внутри ответа, поэтому берём публичный сервис, который отдаёт эту же иконку (PNG 64×64). Пустая строка, если адрес не подходит. */
+const ICON_API = 'https://api.mcstatus.io/v2/icon/';
+function iconUrl(host) {
+  const h = String(host || '').trim().toLowerCase();
+  if (!/^[a-z0-9]([a-z0-9._-]{0,251}[a-z0-9])?(:\d{1,5})?$/.test(h)) return '';
+  if (/^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[)/.test(h) || !/[.]/.test(h.replace(/:\d+$/, ''))) return '';   // локальные адреса из интернета недоступны
+  const u = ICON_API + encodeURIComponent(h.replace(/:25565$/, '')).replace(/%3A/g, ':');
+  return u.length <= 256 ? u : '';
+}
+
+module.exports = { ping, status, parseAddress, savedName, splitHost, iconUrl, _t: { varint, pack } };

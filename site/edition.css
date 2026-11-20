@@ -1,0 +1,69 @@
+/* The artwork is a local fallback. User media and instance slides have priority. */
+.content, dialog {--radius:9px}
+html:not(.has-bg) .lc-bg.empty, .hero-home {
+  background:url("art/moon-valley.webp") center 46% / cover no-repeat!important;
+}
+.hero-home {position:relative;isolation:isolate;display:grid;align-content:end;min-height:clamp(275px,36vh,440px);padding:clamp(26px,4vw,64px);border-radius:18px;overflow:hidden}
+.hero-home::before,.lc-shade {display:block;content:"";position:absolute;inset:0;z-index:-1;opacity:1;background:linear-gradient(90deg,rgba(6,10,13,.86),rgba(6,10,13,.4) 43%,transparent 75%),linear-gradient(0deg,rgba(0,0,0,.4),transparent 50%);pointer-events:none}
+.hero-home h1,.lc-stage .lc-name {font:750 clamp(45px,6vw,90px)/1.02 "Space Grotesk","Segoe UI",sans-serif;letter-spacing:-.055em!important;color:#fff!important;text-shadow:none;margin:12px 0 18px}
+.edition-label {display:inline-flex;gap:10px;align-items:center;color:white;letter-spacing:.15em;text-transform:uppercase;font:600 12px/1.3 "IBM Plex Mono",monospace;letter-spacing:.14em}
+.edition-label::before {content:"";width:23px;height:3px;background:var(--accent)}
+.hero-content {width:min(490px,100%)}
+.hero-content .search {background:var(--bg);margin:0}
+.content {padding:clamp(16px,2vw,32px) clamp(16px,3.3vw,58px) 48px}
+.content-wrap {max-width:1660px;margin-inline:auto;width:100%}
+.lc-home .content {padding:clamp(10px,1.4vw,24px)}
+.lc-home .lc-stage {border-radius:18px}
+.lc-top {justify-content:flex-end}
+.stage-copy {margin:auto 0 clamp(24px,5vh,76px);padding-inline:clamp(22px,4vw,76px);max-width:min(75%,850px);color:#fff}
+.stage-copy p {margin:0 0 19px;max-width:46ch;line-height:1.55;color:#f0f0f0;text-shadow:0 1px 5px #121212}
+.stage-copy #lcMeta:empty {display:none}
+.stage-copy .stage-create {padding:13px 21px;font-size:15px}
+.lc-bar {margin:0;background:var(--surface);padding:16px clamp(16px,2vw,32px);border-top:1px solid var(--line)}
+.inst-strip {gap:6px}
+.inst-strip .inst-tile {border-radius:9px;background:var(--bg);border:1px solid var(--line)}
+.inst-strip .inst-tile[aria-selected="true"] {border-color:var(--accent);background:var(--accent-soft)}
+.content .lc-play {font-size:17px;padding:14px 27px;min-width:160px}
+.content .lc-play::before {content:"";display:inline-block;margin-right:10px;border-block:5px solid transparent;border-left:8px solid currentColor}
+.section-cover {display:flex;align-items:center;justify-content:space-between;gap:22px;position:relative;isolation:isolate;overflow:hidden;padding:clamp(23px,3vw,46px);margin-bottom:22px;border-radius:17px;border:1px solid var(--line);background:var(--surface)}
+.section-cover::before {content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,var(--surface) 22%,color-mix(in srgb,var(--surface) 92%,transparent) 48%,color-mix(in srgb,var(--surface) 45%,transparent)),url("art/moon-valley.webp") right 43% / cover}
+.section-cover h1 {margin:0;font:720 clamp(30px,3.6vw,56px)/1.08 "Space Grotesk","Segoe UI",sans-serif;letter-spacing:-.045em}
+.section-cover .page-lede {max-width:72ch;margin:10px 0 0;font-size:14px;line-height:1.55;color:var(--text)}
+.section-emblem {display:grid;place-items:center;flex:none;width:74px;height:74px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));transform:rotate(-6deg);border-radius:20px;background:var(--bg);color:var(--accent)}
+.section-emblem svg {width:40px;height:40px}
+.section-emblem svg,.quick-icon svg {fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
+.content :is(.panel,.card,.quick-card,.news-card,.setting-card,.srv-card,.state,.srv-add),dialog .lc-card {border:1px solid var(--line);border-radius:13px!important;background:var(--surface)!important}
+.content .panel,.content .setting-card {padding:clamp(16px,1.6vw,26px)}
+.quick-grid {grid-template-columns:repeat(auto-fit,minmax(min(285px,100%),1fr));gap:12px;margin-top:18px}
+.quick-grid .quick-card {position:relative;padding:18px 34px 18px 16px;text-align:left}
+.quick-card::after {content:"›";position:absolute;right:15px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:20px}
+.quick-card .quick-icon {width:50px;height:50px;background:var(--accent-soft);color:var(--accent);border-radius:13px}
+.quick-card .quick-icon svg {width:28px;height:28px;stroke:currentColor}
+.content .setting-card h3 {font-size:18px;letter-spacing:-.025em}
+.set-sec .set-sec-h::after {height:1px}
+.content :is(.chip,.pg),dialog .chip {border-radius:99px!important}
+.content .search,.content select {background-color:var(--bg)}
+.content .state {padding:32px;text-align:center}
+dialog {border:1px solid var(--line-hard);border-radius:16px!important}
+dialog::backdrop {background:rgba(0,0,0,.62);backdrop-filter:blur(5px)}
+dialog .m-head {padding-block:20px;border-bottom:1px solid var(--line);background:linear-gradient(115deg,var(--surface),var(--accent-soft))!important}
+dialog .m-foot {background:var(--bg);border-top:1px solid var(--line)}
+dialog .set-side {background:var(--bg)}
+@media (prefers-reduced-motion:no-preference){
+  .section-cover,.stage-copy,.hero-content,dialog[open] .m-head {animation:edition-enter .36s ease-out both}
+  .section-cover:hover .section-emblem {transform:rotate(0)}
+  .section-emblem {transition:transform .3s ease}
+  html:not(.has-bg) .lc-bg.empty {animation:valley-arrive 2.2s ease-out both}
+  @keyframes valley-arrive {from{transform:scale(1.025)}to{transform:scale(1)}}
+  @keyframes edition-enter {from{opacity:0;translate:0 7px}to{opacity:1;translate:0}}
+}
+@media(max-width:700px){
+  .section-cover {padding:20px;gap:12px}.section-emblem {width:44px;height:44px;border-radius:12px}.section-emblem svg{width:25px;height:25px}
+  .stage-copy {max-width:100%;margin-bottom:22px}.lc-bar {gap:8px}.hero-home{min-height:250px}
+}
+@media(max-height:700px){.stage-copy{margin-bottom:20px}.lc-stage .lc-name{font-size:42px}.lc-bar{padding-block:9px}}
+.memory-chart {display:grid;grid-template-columns:auto minmax(60px,1fr);align-items:center;gap:5px 14px;font-size:12px;color:var(--muted)}
+.memory-chart i {display:block;overflow:hidden;height:8px;border-radius:3px;background:var(--line)}
+.memory-chart b {display:block;height:100%;width:0;background:var(--accent)}
+.memory-chart i:first-of-type b {background:var(--muted)}
+@media(prefers-reduced-motion:no-preference){.memory-chart b{transition:width .18s ease}}

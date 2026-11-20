@@ -60,6 +60,7 @@ const MODES = { 0: 'survival', 1: 'creative', 2: 'adventure', 3: 'spectator' };
 /* Что можно включать и выключать в расширенных настройках (по умолчанию включено всё, кроме координат) */
 const DEFAULT_OPTS = {
   showHost: true,      // адрес и название сервера
+  showServerIcon: true, // иконка сервера вместо логотипа лаунчера (нужен адрес сервера: иконка запрашивается по нему)
   showPlayers: true,   // сколько игроков сейчас на сервере (запрос к серверу, как в списке серверов игры)
   showWorld: true,     // название мира
   showBiome: true,     // биом
@@ -154,6 +155,8 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
     // у Discord всего две строки под названием, поэтому версия и загрузчик идут в строку состояния перед «Мультиплеер»
     const state = [verLabel, st || T.multi].filter(Boolean).join(' · ');
     const out = { details, state, largeText };
+    // иконка сервера: только когда у него есть своя иконка, а адрес разрешено показывать (он входит в ссылку на картинку)
+    if (o.showHost && o.showServerIcon && srv.hasIcon && live.host) { out.iconHost = live.host; out.iconText = srv.name || live.host; }
     // «(12 из 100)» рядом со строкой состояния: Discord рисует это сам из party.size
     if (o.showHost && o.showPlayers && Number.isFinite(srv.online) && Number.isFinite(srv.max) && srv.max > 0) out.party = [Math.max(0, srv.online), Math.max(srv.max, srv.online)];
     return out;

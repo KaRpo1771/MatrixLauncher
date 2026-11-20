@@ -15,11 +15,15 @@ let DISCORD_APP_ID = process.env.DISCORD_APP_ID || '';
 try { DISCORD_APP_ID = require('./discord-app') || DISCORD_APP_ID; } catch {}
 const { DiscordPresence } = require('./discord');
 const serverping = require('./serverping');
+const appmedia = require('./appmedia');
 
 // название продукта сменилось на MatrixL, данные (аккаунты, экземпляры) остаются в прежней папке
 app.setPath('userData', path.join(app.getPath('appData'), 'ModMatrix'));
 
 if (!app.requestSingleInstanceLock()) { app.quit(); }
+
+// MP4 бывают в разных кодеках: включаем аппаратное декодирование H.265 (HEVC), чтобы такие видео тоже шли на фоне лаунчера
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
 
 let win = null;
 const busy = new Set(); // установки, с которыми сейчас идёт работа
@@ -44,8 +48,8 @@ const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: '
    Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
 const PRES = {
   ru: {
-    pages: { home: 'Главная страница', mods: 'Просмотр модов', plugins: 'Просмотр плагинов', modpacks: 'Просмотр сборок', resourcepacks: 'Просмотр ресурспаков', shaders: 'Просмотр шейдеров', favorites: 'Просмотр избранного', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
-    viewing: { mod: 'Просмотр мода', plugin: 'Просмотр плагина', modpack: 'Просмотр сборки', resourcepack: 'Просмотр ресурспака', shader: 'Просмотр шейдера' }, author: a => `Автор: ${a}`,
+    pages: { home: 'Главная страница', mods: 'Смотрит моды', plugins: 'Смотрит плагины', modpacks: 'Смотрит сборки', resourcepacks: 'Смотрит ресурспаки', shaders: 'Смотрит шейдеры', favorites: 'Смотрит избранное', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
+    viewing: { mod: 'Смотрит мод', plugin: 'Смотрит плагин', modpack: 'Смотрит сборку', resourcepack: 'Смотрит ресурспак', shader: 'Смотрит шейдер' }, author: a => `Автор: ${a}`,
     tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
     inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
     favs: n => `${n} ${plural(n, 'карточка', 'карточки', 'карточек')} в избранном`,
@@ -76,7 +80,8 @@ function applyPresence() {
   if (presence.playing.size) {
     const g = [...presence.playing.values()].pop();
     const d = g.live ? activity.describe(g.live, g.inst, o, Date.now(), lang) : { details: P.playing(g.mc), state: g.stateFor(lang) };
-    rpc.set({ details: d.details, state: d.state || g.stateFor(lang), start: o.showTimer ? g.start : 0, largeText: d.largeText, party: d.party });
+    rpc.set({ details: d.details, state: d.state || g.stateFor(lang), start: o.showTimer ? g.start : 0, largeText: d.largeText, party: d.party,
+      serverIcon: d.iconHost ? serverping.iconUrl(d.iconHost) : '', serverText: d.iconText });
   } else if (presence.tasks.size) {
     rpc.set({ details: P.tasks[[...presence.tasks.values()].pop()] || P.tasks.mods, state: instLine(presence.inst), start });
   } else if (!o.showLauncher) {
@@ -85,12 +90,12 @@ function applyPresence() {
     let details = P.pages[presence.page] || P.pages.home;
     let state;
     if (presence.item) {
-      // открыта карточка мода, плагина, сборки, ресурспака или шейдера: «Просмотр мода: Sodium», ниже автор
+      // открыта карточка мода, плагина, сборки, ресурспака или шейдера: «Смотрит мод: Sodium», ниже автор
       const it = presence.item;
       details = `${P.viewing[it.kind] || P.viewing.mod}: ${it.title}`;
       state = it.author ? P.author(it.author) : undefined;
     }
-    // каталоги: одна строка «Просмотр модов | 1.12.2», версия видна только если выбрана в фильтре
+    // каталоги: одна строка «Смотрит моды | 1.12.2», версия видна только если выбрана в фильтре
     else if (CATALOG_PAGES.has(presence.page)) { if (presence.gv) details += ` | ${presence.gv}`; }
     else if (presence.page === 'home') state = instLine(presence.inst);
     else if (presence.page === 'favorites' && presence.favs) state = P.favs(presence.favs);
@@ -125,6 +130,8 @@ function hideLauncher() {
   hiddenByGame = true; win.setSkipTaskbar(true); win.hide();
 }
 function showLauncher(focus) {
+  // окна уже нет (закрыто): создаём его заново, но только если окно одно, второе никогда не открываем
+  if ((!win || win.isDestroyed()) && !quitting && app.isReady()) createWindow();
   if (!win || win.isDestroyed()) return;
   hiddenByGame = false; closeAfterGame = false;
   win.setSkipTaskbar(false);
@@ -168,6 +175,17 @@ function registerIpc() {
   });
   handle('skin:reset', id => accounts.skinReset(String(id || '')));
   handle('skin:cape', ({ id, capeId } = {}) => accounts.capeSet(String(id || ''), capeId ? String(capeId) : null));
+
+  /* --- свой фон лаунчера (картинка, GIF, видео) --- */
+  handle('appmedia:get', () => appmedia.view());
+  handle('appmedia:pickBg', async () => {
+    const r = await dialog.showOpenDialog(win, { title: 'Фон лаунчера', properties: ['openFile'], filters: appmedia.filters.background });
+    if (r.canceled || !r.filePaths.length) return null;
+    return appmedia.setBackground(r.filePaths[0]);
+  });
+  handle('appmedia:convertBg', () => appmedia.convertBackground());
+  handle('appmedia:clearBg', () => appmedia.clearBackground());
+  handle('appmedia:options', patch => appmedia.setOptions(patch));
 
   /* --- своя шапка окна: «свернуть», «развернуть» и «закрыть» --- */
   handle('win:toggle', () => { if (!win) return false; if (win.isMaximized()) win.unmaximize(); else win.maximize(); return win.isMaximized(); });
@@ -294,10 +312,10 @@ function registerIpc() {
         if (live.srvHost !== live.host) { live.srvHost = live.host; live.srvAt = 0; live.srv = { name: serverping.savedName(core.instDir(id), live.host) }; }
         if (Date.now() - (live.srvAt || 0) < 60000) return;
         const o = activity.resolveOpts(accounts.getSettings());
-        if (!o.showHost || !o.showPlayers) return;
+        if (!o.showHost || !(o.showPlayers || o.showServerIcon)) return;   // запрос статуса нужен для числа игроков и для проверки, есть ли у сервера иконка
         live.srvAt = Date.now();
         const { host, port } = serverping.splitHost(live.host), asked = live.host;
-        serverping.ping(host, port).then(r => { if (live.host === asked) { live.srv = { ...(live.srv || {}), online: r.online, max: r.max }; refresh(); } }).catch(() => { /* сервер не отвечает на запрос статуса: показываем только название */ });
+        serverping.ping(host, port).then(r => { if (live.host === asked) { live.srv = { ...(live.srv || {}), online: r.online, max: r.max, hasIcon: !!r.hasIcon }; refresh(); } }).catch(() => { /* сервер не отвечает на запрос статуса: показываем только название */ });
       };
       const refresh = () => { const e = presence.playing.get(id); if (e) applyPresence(); if (live.mode === 'server') pingServer(); };
       // название, режим, измерение и биом читаются из файлов мира, пока игрок в одиночной игре
@@ -319,8 +337,9 @@ function registerIpc() {
           if (crash) lastCrash = { ...crash, id };
           send('game-exit', { id, code });
           // игра упала: лаунчер возвращается из скрытого режима, и сразу показывается окно с отчётом
-          if (!presence.playing.size && closeAfterGame && !crash) { quitting = true; app.quit(); return; }   // окно уже закрывали: теперь можно выйти
-          if (hiddenByGame && !presence.playing.size) showLauncher(true);
+          // окно закрывали при работающей игре: при включённом сворачивании лаунчер возвращается (в единственном окне), иначе выходит
+          if (!presence.playing.size && closeAfterGame && !crash && !hideOnLaunchOn()) { quitting = true; app.quit(); return; }
+          if ((hiddenByGame || closeAfterGame) && !presence.playing.size) showLauncher(true);
           if (crash) {
             if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
             send('game-crash', { id, name: inst.name, mc: inst.mc, loader: inst.loader, code, text: crash.text, summary: crash.summary, hasFile: !!(crash.crashFile || crash.logFile) });
@@ -416,6 +435,23 @@ function registerIpc() {
         extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'many', text, pct })), 'mod'));
     } finally { release(); }
   });
+  /* --- «Скачать всё» из избранного: в готовый экземпляр или в ZIP (mods / resourcepacks / shaderpacks по папкам) --- */
+  const dlProgress = (text, pct, extra) => (extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'dlall', text, pct }));
+  handle('dlall:instance', async ({ instanceId, items }) => {
+    const release = lock(instanceId);
+    try {
+      return await withTask('mods', () => core.startJob(() => core.installBatch({ instanceId, items }, dlProgress), 'mod'));
+    } finally { release(); }
+  });
+  handle('dlall:zip', async ({ items, mc, loader, name }) => {
+    const safe = String(name || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim() || 'MatrixL-избранное';
+    const r = await dialog.showSaveDialog(win, { title: 'Скачать всё в ZIP', defaultPath: path.join(app.getPath('downloads'), safe + '.zip'), filters: [{ name: 'Архив ZIP', extensions: ['zip'] }] });
+    if (r.canceled || !r.filePath) return null;
+    const dest = /\.zip$/i.test(r.filePath) ? r.filePath : r.filePath + '.zip';
+    const res = await withTask('mods', () => core.startJob(() => core.downloadAllZip({ items, mc, loader, dest }, dlProgress), 'mod'));
+    try { shell.showItemInFolder(dest); } catch { /* проводник не открылся, архив всё равно готов */ }
+    return res;
+  });
   /* --- ресурспаки и шейдеры: в resourcepacks / shaderpacks выбранного экземпляра (любой загрузчик, в том числе Vanilla) --- */
   const resTask = kind => (kind === 'shader' ? 'shader' : 'resourcepack');
   handle('res:install', async ({ instanceId, kind, slug, source, cfId }) => {
@@ -488,6 +524,7 @@ function registerIpc() {
 }
 
 function createWindow() {
+  if (win && !win.isDestroyed()) return;   // второе окно лаунчера не создаётся
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 900, minHeight: 600,
     backgroundColor: '#050706', title: 'MatrixL', frame: false, icon: path.join(__dirname, '..', 'site', 'logo.png'), autoHideMenuBar: true,
@@ -525,6 +562,7 @@ app.setAppUserModelId('app.modmatrix.launcher');   // значок и групп
 app.whenReady().then(() => {
   const userData = app.getPath('userData');
   accounts.init(userData);
+  appmedia.init(userData);
   core.init(path.join(userData, 'minecraft'));
   core.setCurseKeyProvider(() => CURSEFORGE_KEY);   // ключ CurseForge встроен в приложение
   registerIpc();
@@ -558,5 +596,5 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
 app.on('before-quit', () => { quitting = true; rpc.destroy(); });
-app.on('second-instance', () => { if (win) { showLauncher(true); } });
+app.on('second-instance', () => { showLauncher(true); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

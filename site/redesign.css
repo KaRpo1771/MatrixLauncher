@@ -1,0 +1,247 @@
+/* ============================================================
+   MatrixL 1.3.5: редизайн.
+   Слой поверх style.css и edition.css. Цвета берутся только из
+   существующих переменных темы (--accent, --surface, --line…),
+   поэтому цветокоррекция и переключение акцентов не меняются.
+   Порядок и положение кнопок верхнего меню тоже не тронуты.
+   ============================================================ */
+
+:root{
+  --rd-ease:cubic-bezier(.2,.8,.2,1);
+  --rd-spring:cubic-bezier(.3,1.4,.5,1);
+  --rd-glass:color-mix(in srgb,var(--bg-0) 74%,transparent);
+}
+
+/* ---------- верхнее меню: те же кнопки на тех же местах ---------- */
+.topbar{position:sticky}
+.topbar .nav{position:relative}
+.nav-ink{
+  position:absolute;left:0;bottom:0;height:3px;width:0;border-radius:3px 3px 0 0;
+  background:var(--accent);pointer-events:none;
+  box-shadow:0 0 14px color-mix(in srgb,var(--accent) 80%,transparent);
+  transition:transform .38s var(--rd-ease),width .38s var(--rd-ease),opacity .2s;
+  opacity:0;
+}
+.nav-ink.on{opacity:1}
+.topbar .nav-item.active{box-shadow:none!important}
+.nav-item .nav-icon{transition:transform .32s var(--rd-spring),filter .3s}
+.nav-item:hover .nav-icon{transform:translateY(-2px) rotate(-7deg) scale(1.1)}
+.nav-item.active .nav-icon{filter:drop-shadow(0 0 7px color-mix(in srgb,var(--accent) 70%,transparent))}
+.nav-item:active .nav-icon{transform:scale(.9)}
+.topbar::after{
+  display:block!important;content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent) -40% 0/38% 100% no-repeat;
+  opacity:.75;
+}
+.nav-count{transition:transform .3s var(--rd-spring)}
+.nav-item:hover .nav-count{transform:scale(1.12)}
+
+/* ---------- главная: сцена ---------- */
+.lc-home .lc-stage{
+  border-radius:22px;border:1px solid color-mix(in srgb,var(--accent) 16%,var(--line));
+  box-shadow:0 34px 70px -34px #000,0 0 0 1px color-mix(in srgb,var(--accent) 6%,transparent);
+  --px:0;--py:0;
+}
+.lc-stage .lc-bg{transform:translate3d(calc(var(--px)*-9px),calc(var(--py)*-6px),0) scale(1.05);transition:transform .35s ease-out}
+/* затемнение уходит в левый верхний угол, где теперь стоит название */
+.lc-stage .lc-shade{
+  background:
+    radial-gradient(115% 95% at 0% 0%,rgba(6,10,13,.86),rgba(6,10,13,.42) 38%,transparent 64%),
+    linear-gradient(0deg,rgba(0,0,0,.55),transparent 38%);
+}
+/* уголки-«прицел» по краям сцены */
+.lc-stage::after{
+  content:"";position:absolute;inset:14px;z-index:1;pointer-events:none;border-radius:14px;
+  --c:color-mix(in srgb,var(--accent) 75%,transparent);
+  background:
+    linear-gradient(var(--c),var(--c)) 0 0/26px 2px,linear-gradient(var(--c),var(--c)) 0 0/2px 26px,
+    linear-gradient(var(--c),var(--c)) 100% 0/26px 2px,linear-gradient(var(--c),var(--c)) 100% 0/2px 26px,
+    linear-gradient(var(--c),var(--c)) 0 100%/26px 2px,linear-gradient(var(--c),var(--c)) 0 100%/2px 26px,
+    linear-gradient(var(--c),var(--c)) 100% 100%/26px 2px,linear-gradient(var(--c),var(--c)) 100% 100%/2px 26px;
+  background-repeat:no-repeat;
+}
+.lc-fx{position:absolute;inset:0;z-index:0;pointer-events:none;mix-blend-mode:screen}
+.lc-fx canvas{display:block;width:100%;height:100%}
+
+/* название экземпляра: левый верхний угол */
+.lc-stage .lc-top{position:relative;z-index:3;padding:clamp(18px,2.4vw,30px) clamp(20px,3vw,40px)}
+.lc-stage .stage-copy{
+  position:absolute;z-index:2;top:clamp(26px,4.4vh,50px);left:clamp(24px,3.2vw,52px);
+  margin:0;padding:0;max-width:min(64%,820px);
+  transition:transform .35s ease-out;
+  transform:translate3d(calc(var(--px)*5px),calc(var(--py)*3px),0);
+}
+.lc-stage .lc-name{font-size:clamp(40px,5.2vw,80px);margin:16px 0 18px;text-shadow:0 4px 30px rgba(0,0,0,.45)}
+.lc-stage .edition-label{
+  padding:6px 14px 6px 11px;border-radius:99px;font-size:11px;
+  border:1px solid color-mix(in srgb,var(--accent) 50%,transparent);
+  background:rgba(10,8,5,.5);backdrop-filter:blur(8px);
+}
+.lc-stage .edition-label::before{width:8px;height:8px;border-radius:1px;box-shadow:0 0 10px var(--accent)}
+.lc-meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 4px}
+.lc-meta:empty{display:none}
+.meta-chip{
+  padding:5px 12px;border-radius:9px;font:500 13.5px/1.4 "IBM Plex Sans",system-ui,sans-serif;color:#f4f0e8;
+  background:rgba(10,8,5,.52);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(10px);
+}
+.lc-stage .stage-intro{max-width:46ch;margin:0 0 18px;color:#f0f0f0}
+.lc-stage .lc-chip{border-radius:11px;background:var(--rd-glass);backdrop-filter:blur(14px);transition:transform .25s var(--rd-spring),border-color .2s,background .2s}
+.lc-stage .lc-chip:hover{transform:translateY(-2px)}
+
+/* нижняя панель: стеклянная «док»-плашка поверх арта */
+.lc-stage .lc-bar{
+  position:relative;z-index:3;margin:auto clamp(14px,1.8vw,24px) clamp(14px,1.8vw,24px);
+  border:1px solid color-mix(in srgb,var(--accent) 20%,var(--line));border-radius:18px;
+  background:var(--rd-glass);backdrop-filter:blur(20px) saturate(1.25);
+  box-shadow:0 20px 44px -20px #000,inset 0 1px 0 rgba(255,255,255,.06);
+  padding:12px clamp(14px,1.6vw,22px);
+}
+.inst-strip .inst-tile{position:relative;border-radius:13px;transition:transform .3s var(--rd-spring),background .2s,border-color .2s,box-shadow .3s}
+.inst-strip .inst-tile:hover{transform:translateY(-4px)}
+.inst-strip .inst-tile:active{transform:translateY(-1px) scale(.96)}
+.inst-strip .inst-tile[aria-selected="true"]{box-shadow:0 0 0 1px var(--accent) inset,0 12px 26px -12px color-mix(in srgb,var(--accent) 75%,transparent)}
+.inst-strip .inst-tile[aria-selected="true"]::after{
+  content:"";position:absolute;left:50%;bottom:-7px;width:16px;height:3px;margin-left:-8px;border-radius:3px;background:var(--accent);
+  box-shadow:0 0 10px var(--accent);
+}
+.inst-add .inst-ic{transition:transform .35s var(--rd-spring)}
+.inst-add:hover .inst-ic{transform:rotate(90deg)}
+.lc-bar-left>.btn{border-radius:12px}
+.content .lc-folder{border-radius:12px!important;transition:transform .25s var(--rd-spring),border-color .2s}
+.content .lc-folder:hover{transform:translateY(-2px) rotate(-4deg)}
+
+/* кнопка «Играть» */
+.content .lc-play{
+  position:relative;overflow:hidden;border-radius:13px!important;
+  box-shadow:0 12px 32px -12px color-mix(in srgb,var(--accent) 80%,transparent),inset 0 1px 0 rgba(255,255,255,.35);
+  transition:transform .25s var(--rd-spring),box-shadow .3s;
+}
+.content .lc-play:hover:not([disabled]){transform:translateY(-2px) scale(1.02);box-shadow:0 18px 40px -12px color-mix(in srgb,var(--accent) 90%,transparent),inset 0 1px 0 rgba(255,255,255,.4)}
+.content .lc-play:active:not([disabled]){transform:scale(.97)}
+.content .lc-play::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(105deg,transparent 38%,rgba(255,255,255,.5) 50%,transparent 62%);
+  transform:translateX(-130%);
+}
+.content .lc-play[disabled]::after{display:none}
+
+/* ---------- баннеры страниц ---------- */
+.section-cover{
+  --px:0;--py:0;
+  box-shadow:0 22px 44px -28px #000,inset 0 1px 0 rgba(255,255,255,.05);
+  border-color:color-mix(in srgb,var(--accent) 16%,var(--line));
+}
+/* картинка только у экземпляров: в баннере страницы остаётся ровная поверхность */
+.section-cover::before{background:linear-gradient(100deg,var(--surface),color-mix(in srgb,var(--accent) 7%,var(--surface)))}
+.section-cover::after{
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(circle,color-mix(in srgb,var(--accent) 42%,transparent) 1px,transparent 1.6px) 0 0/18px 18px;
+  -webkit-mask-image:linear-gradient(90deg,transparent 30%,#000 95%);mask-image:linear-gradient(90deg,transparent 30%,#000 95%);
+  opacity:.8;
+}
+.cover-copy{min-width:0;position:relative}
+.section-cover h1::after{
+  content:"";display:block;width:64px;height:4px;margin-top:14px;
+  background:repeating-linear-gradient(90deg,var(--accent) 0 9px,transparent 9px 13px);
+}
+.cover-deco{position:absolute;inset:0;z-index:-1;pointer-events:none;overflow:hidden}
+.cover-deco i{
+  position:absolute;display:block;border:1px solid color-mix(in srgb,var(--accent) 60%,transparent);
+  background:color-mix(in srgb,var(--accent) 16%,transparent);border-radius:2px;
+  translate:calc(var(--px)*var(--d,10)*1px) calc(var(--py)*var(--d,10)*.6px);transition:translate .4s ease-out;
+}
+.cover-deco i:nth-child(1){right:22%;top:18%;width:12px;height:12px;--d:-16}
+.cover-deco i:nth-child(2){right:13%;top:66%;width:8px;height:8px;--d:-26}
+.cover-deco i:nth-child(3){right:31%;top:72%;width:16px;height:16px;--d:-10}
+.cover-deco i:nth-child(4){right:6%;top:14%;width:7px;height:7px;--d:-30}
+.cover-deco i:nth-child(5){right:40%;top:26%;width:6px;height:6px;--d:-20}
+.cover-deco i:nth-child(6){right:19%;top:44%;width:10px;height:10px;--d:-22}
+.section-emblem{
+  position:relative;
+  box-shadow:0 0 0 7px color-mix(in srgb,var(--accent) 8%,transparent),0 20px 44px -16px color-mix(in srgb,var(--accent) 75%,transparent),inset 0 1px 0 rgba(255,255,255,.08);
+  transform:rotate(-6deg) translate3d(calc(var(--px)*-5px),calc(var(--py)*-4px),0);
+  transition:transform .35s var(--rd-spring);
+}
+.section-cover:hover .section-emblem{transform:rotate(0) translate3d(calc(var(--px)*-5px),calc(var(--py)*-4px),0)}
+.emblem-ring{position:absolute;inset:-12px;border:1px dashed color-mix(in srgb,var(--accent) 50%,transparent);border-radius:28px;pointer-events:none}
+.section-emblem svg{position:relative}
+
+/* ---------- карточки ---------- */
+.content :is(.panel,.card,.quick-card,.news-card,.setting-card,.srv-card,.srv-add){
+  position:relative;
+  transition:transform .3s var(--rd-spring),border-color .25s,box-shadow .3s;
+}
+.content :is(.card,.quick-card,.news-card,.srv-card):hover{
+  transform:translateY(-3px);
+  border-color:color-mix(in srgb,var(--accent) 55%,var(--line))!important;
+  box-shadow:0 18px 36px -20px #000,0 0 0 1px color-mix(in srgb,var(--accent) 25%,transparent);
+}
+.content :is(.card,.quick-card,.news-card,.srv-card):active{transform:translateY(-1px) scale(.992)}
+.quick-card .quick-icon{transition:transform .35s var(--rd-spring),background .25s}
+.quick-card:hover .quick-icon{transform:rotate(-8deg) scale(1.08);background:color-mix(in srgb,var(--accent) 24%,transparent)}
+.quick-card::after{transition:transform .3s var(--rd-spring),color .2s}
+.quick-card:hover::after{transform:translate(4px,-50%);color:var(--accent)}
+
+/* ---------- кнопки, окна ---------- */
+.btn{transition:transform .25s var(--rd-spring),box-shadow .3s,background .2s,border-color .2s,color .2s}
+.btn:not([disabled]):hover{transform:translateY(-1px)}
+.btn:not([disabled]):active{transform:scale(.97)}
+.btn.primary{position:relative;overflow:hidden}
+.rip{position:absolute;border-radius:50%;pointer-events:none;background:rgba(255,255,255,.4);transform:scale(0);animation:rip .6s ease-out forwards}
+dialog[open]{animation:dlg-in .3s var(--rd-ease) both}
+dialog[open]::backdrop{animation:dlg-fade .3s ease both}
+
+/* ---------- анимации (только если движение разрешено) ---------- */
+@media (prefers-reduced-motion:no-preference){
+  .nav-ink.on{transition:transform .38s var(--rd-ease),width .38s var(--rd-ease),opacity .2s}
+  .topbar::after{animation:topline 9s linear infinite}
+  .content-wrap.page-in{animation:page-in .42s var(--rd-ease) both}
+  .rv{animation:rv .55s var(--rd-ease) both;animation-delay:calc(var(--i,0)*38ms)}
+  .section-cover h1::after{animation:bar-grow .7s .15s var(--rd-ease) both}
+  .section-emblem svg path{stroke-dasharray:1;stroke-dashoffset:1;animation:draw 1.05s .25s var(--rd-ease) forwards}
+  .emblem-ring{animation:spin 26s linear infinite}
+  .cover-deco i{animation:drift 9s ease-in-out infinite}
+  .cover-deco i:nth-child(2n){animation-duration:12s;animation-delay:-4s}
+  .cover-deco i:nth-child(3n){animation-duration:15s;animation-delay:-8s}
+  .lc-stage::after{animation:fade-in 1.2s .2s ease both}
+  .lc-stage .edition-label::before{animation:blink 2.4s ease-in-out infinite}
+  .lc-stage .meta-chip{animation:chip-in .5s var(--rd-ease) both}
+  .lc-stage .meta-chip:nth-child(2){animation-delay:.08s}
+  .lc-stage .meta-chip:nth-child(3){animation-delay:.16s}
+  .lc-stage .meta-chip:nth-child(4){animation-delay:.24s}
+  .lc-stage .lc-name{animation:name-in .7s .05s var(--rd-ease) both}
+  .lc-stage .lc-bar{animation:dock-in .6s .15s var(--rd-ease) both}
+  .content .lc-play:not([disabled])::after{animation:play-shine 5.5s 2s ease-in-out infinite}
+}
+@keyframes rv{from{opacity:0;transform:translateY(14px)}}
+@keyframes page-in{from{opacity:0;transform:translateY(8px)}}
+@keyframes bar-grow{from{width:0}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes spin{to{rotate:360deg}}
+@keyframes drift{0%,100%{margin-top:0;opacity:.9}50%{margin-top:-12px;opacity:.5}}
+@keyframes fade-in{from{opacity:0}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes chip-in{from{opacity:0;transform:translateY(8px) scale(.96)}}
+@keyframes name-in{from{opacity:0;letter-spacing:-.02em;transform:translateX(-14px)}}
+@keyframes dock-in{from{opacity:0;transform:translateY(18px)}}
+@keyframes play-shine{0%,62%{transform:translateX(-130%)}100%{transform:translateX(130%)}}
+@keyframes topline{to{background-position:140% 0}}
+@keyframes rip{to{transform:scale(1);opacity:0}}
+@keyframes dlg-in{from{opacity:0;transform:translateY(12px) scale(.97)}}
+@keyframes dlg-fade{from{opacity:0}}
+
+@media (prefers-reduced-motion:reduce){
+  .lc-stage .lc-bg,.lc-stage .stage-copy,.cover-deco i,.section-emblem{transition:none!important}
+  .lc-fx{display:none}
+}
+@media (max-width:700px){
+  .lc-stage .stage-copy{max-width:calc(100% - 40px)}
+  .lc-stage::after{inset:8px}
+  .cover-deco{display:none}
+  .emblem-ring{inset:-7px;border-radius:16px}
+}
+@media (max-height:700px){
+  .lc-stage .lc-name{font-size:40px;margin:10px 0 12px}
+}
+
+.play-stats{margin-top:10px}

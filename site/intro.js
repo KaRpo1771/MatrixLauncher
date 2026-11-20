@@ -103,6 +103,8 @@
     const ay = cy - fs * 0.04;   // линия полёта стрелы
     const startX = -260, endX = W + 260;
     let revealed = false;
+    let ring = null;   // ударная волна: возникает, когда стрела проходит середину слова
+    const VER = ((document.getElementById('tbVer') || {}).textContent || '').trim();
 
     const t00 = performance.now();
     const frame = now => {
@@ -115,6 +117,7 @@
       const p = Math.min(1, Math.max(0, (t - TIMING.arrowAt) / TIMING.arrowMs));
       const tipX = startX + Math.pow(p, 1.5) * (endX - startX);
       const arrowOn = t >= TIMING.arrowAt && p < 1;
+      if (!ring && arrowOn && tipX >= W / 2) ring = { t0: t };
 
       /* целая часть слова (правее острия) */
       if (t < TIMING.arrowAt + TIMING.arrowMs) {
@@ -123,6 +126,36 @@
         ctx.beginPath(); ctx.rect(Math.max(0, tipX), 0, W, H); ctx.clip();
         ctx.translate(x0, cy); drawWord(ctx);
         ctx.restore();
+      }
+
+      /* подпись: тонкая линия растёт от центра, под ней номер версии; гаснет, когда стрела проходит */
+      const lineK = easeIO(clamp01((t - 40) / 420));
+      if (lineK > 0 && t < TIMING.arrowAt + TIMING.arrowMs + 160) {
+        const fo = 1 - clamp01((t - (TIMING.arrowAt + TIMING.arrowMs - 80)) / 240);
+        const ly = cy + fs * 0.62, half = ww * 0.5 * lineK;
+        const lg = ctx.createLinearGradient(W / 2 - half, 0, W / 2 + half, 0);
+        lg.addColorStop(0, 'rgba(0,0,0,0)'); lg.addColorStop(.5, COL.a); lg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.globalAlpha = .8 * fo; ctx.fillStyle = lg; ctx.fillRect(W / 2 - half, ly, half * 2, 2);
+        if (VER) {
+          ctx.globalAlpha = .6 * fo * clamp01((t - 220) / 200); ctx.fillStyle = COL.text;
+          ctx.font = `500 ${Math.max(12, fs * .13)}px "IBM Plex Sans",system-ui,sans-serif`;
+          ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+          ctx.fillText(VER, W / 2, ly + 12);
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        }
+        ctx.globalAlpha = 1;
+      }
+      /* вспышка и кольцо в точке, где стрела пробила слово */
+      if (ring && t - ring.t0 < 560) {
+        const k = (t - ring.t0) / 560, e = ease(k);
+        const R = Math.max(W, H) * .34 * e;
+        const fg = ctx.createRadialGradient(W / 2, cy, 0, W / 2, cy, fs * 2.2);
+        fg.addColorStop(0, COL.a); fg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.globalAlpha = Math.pow(1 - k, 2) * .35; ctx.fillStyle = fg;
+        ctx.fillRect(W / 2 - fs * 2.2, cy - fs * 2.2, fs * 4.4, fs * 4.4);
+        ctx.globalAlpha = (1 - k) * .75; ctx.strokeStyle = COL.a; ctx.lineWidth = 0.6 + 2.6 * (1 - k);
+        ctx.beginPath(); ctx.arc(W / 2, cy, R, 0, 6.2832); ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
       /* квадраты, которых достало острие, разлетаются по экрану */
@@ -134,7 +167,7 @@
             const e = ease(clamp01((q.ta - t) / q.fly));                  // где будет к началу сборки
             q.mx = lerp(q.x, q.tx, e); q.my = lerp(q.y, q.ty, e);
             q.ra = (q.rot + q.rv * (q.ta - t) / 1000) % 6.2832;
-            if (Math.random() < 0.05) sparks.push({ x: q.x, y: q.y, vx: rnd(150, 700), vy: rnd(-380, 380), t0: t, life: rnd(260, 480) });
+            if (Math.random() < 0.08) sparks.push({ x: q.x, y: q.y, vx: rnd(150, 700), vy: rnd(-380, 380), t0: t, life: rnd(260, 480) });
           }
         }
       }
@@ -159,6 +192,8 @@
             const k = clamp01((t - q.rd) / TIMING.revealMs);
             if (k >= 1) continue;
             sz *= 1 - k * k; a += q.dir * k * 1.3;
+            const wv = Math.sin(k * Math.PI) * .38;   // тёплая волна: клетки на миг теплеют, пока сжимаются
+            r = lerp(r, AC[0], wv); g = lerp(g, AC[1], wv); b = lerp(b, AC[2], wv);
           }
         }
         ctx.globalAlpha = 1;
@@ -175,6 +210,10 @@
         ctx.fillRect(sp.x + sp.vx * s, sp.y + sp.vy * s + 300 * s * s, 2.4, 2.4);
       }
       ctx.globalAlpha = 1;
+
+      /* тонкий индикатор по нижнему краю, исчезает при раскрытии меню */
+      const pg = clamp01(t / TIMING.revealAt), pa = 1 - clamp01((t - TIMING.revealAt) / 300);
+      if (pa > 0) { ctx.globalAlpha = .55 * pa; ctx.fillStyle = COL.a; ctx.fillRect(0, H - 2, W * easeIO(pg), 2); ctx.globalAlpha = 1; }
 
       /* стрела: светящийся след, древко, наконечник и оперение */
       if (arrowOn) {

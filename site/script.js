@@ -348,10 +348,16 @@ function shortNum(n){
   return String(n);
 }
 function dateRu(s){ return s ? new Date(s).toLocaleDateString("ru-RU") : "-"; }
-let toastTimer;
+let toastTimer, toastFadeTimer;
+const TOAST_FADE = 700;   // сколько уведомление растворяется, мс (совпадает с transition в style.css)
 function toast(msg, ms){
-  const el = $("toast"); el.textContent = msg; el.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(()=> el.hidden = true, ms || 2400);
+  const el = $("toast"); el.textContent = msg;
+  clearTimeout(toastTimer); clearTimeout(toastFadeTimer);
+  el.classList.remove("fading"); el.hidden = false;
+  toastTimer = setTimeout(()=>{
+    el.classList.add("fading");   // плавно гасим, потом прячем
+    toastFadeTimer = setTimeout(()=>{ el.hidden = true; el.classList.remove("fading"); }, TOAST_FADE);
+  }, Math.round((ms || 2400) * 1.6));
 }
 
 function normTitle(t){ return String(t||"").toLowerCase().replace(/[^a-z0-9а-яё]+/gi,""); }
@@ -785,6 +791,113 @@ function filterVersionRows(rows, f){
   });
 }
 
+/* ---------- порядок версий игры и загрузчиков в списках ----------
+   Площадки отдают версии игры вперемешку (1.17.1, 1.21, 1.16.5, …), а у шейдеров среди них
+   встречаются ещё и «OptiFine» с «Iris». Здесь всё раскладывается: загрузчики отдельно и по
+   порядку, релизы от новых к старым и по линиям (1.21.x, 1.20.x, …), снапшоты в конце. */
+const MC_REL_RE = /^\d+(?:\.\d+){1,3}$/;
+const LOADER_ORDER = ["fabric","quilt","forge","neoforge","iris","oculus","optifine","canvas","vanilla"];
+function mcCmp(a, b){   // новые версии первыми
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for(let i = 0; i < Math.max(pa.length, pb.length); i++){ const d = (pb[i] || 0) - (pa[i] || 0); if(d) return d; }
+  return 0;
+}
+const loaderCmp = (a, b)=>{
+  const ia = LOADER_ORDER.indexOf(a), ib = LOADER_ORDER.indexOf(b);
+  return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || String(a).localeCompare(String(b));
+};
+/* → { rel, other, loaders }: релизы (новые первыми), прочее (снапшоты и т.п.), загрузчики */
+function splitGameList(list){
+  const rel = [], other = [], loaders = [];
+  for(const raw of new Set((list || []).map(x=> String(x).trim()).filter(x=> x && x !== "-"))){
+    const low = raw.toLowerCase();
+    if(LOADER_LABEL[low]) loaders.push(low);
+    else if(MC_REL_RE.test(raw)) rel.push(raw);
+    else other.push(raw);
+  }
+  rel.sort(mcCmp);
+  other.sort((a, b)=> b.localeCompare(a, "en", {numeric:true}));
+  return { rel, other, loaders };
+}
+/* линия версии: 1.21.4 → «1.21», для новой нумерации (26.1.2) → «26» */
+const mcLine = v => { const p = v.split("."); return p[0] === "1" ? p.slice(0, 2).join(".") : p[0]; };
+/* группы релизов по линиям: [{line, items}], порядок сохраняется (новые первыми) */
+function groupByLine(rel){
+  const groups = [];
+  for(const v of rel){
+    const line = mcLine(v), g = groups[groups.length - 1];
+    if(g && g.line === line) g.items.push(v); else groups.push({ line, items: [v] });
+  }
+  return groups;
+}
+/* HTML списка версий игры: по строке на линию; limit обрезает самые старые.
+   Хвост «+N ещё версий» - кнопка: по клику список раскрывается целиком, повторный клик сворачивает его обратно */
+const gvStore = new Map();
+let gvSeq = 0;
+const gvBtn = (id, open, hidden)=> `<button type="button" class="vg vg-more" data-gv="${id}" aria-expanded="${open}">${open ? "Скрыть версии" : `+${hidden} ещё версий`}</button>`;
+/* версия в списке: на страницах каталога это кнопка, по клику она ставится в фильтр «Версия игры» */
+function gvItems(items){
+  if(!$("gv")) return items.join(", ");
+  const cur = $("gv").value;
+  return items.map(v=> `<button type="button" class="gv-v${v === cur ? " on" : ""}" data-v="${v}" title="${v === cur ? "Снять фильтр по версии" : "Показать только версию " + v}">${v}</button>`).join(", ");
+}
+function gameVersionsHTML(list, limit){
+  const { rel, other } = splitGameList(list);
+  let left = limit || Infinity, hidden = 0;
+  const lines = [];
+  for(const g of groupByLine(rel)){
+    const take = g.items.slice(0, Math.max(0, left)); left -= take.length; hidden += g.items.length - take.length;
+    if(take.length) lines.push(`<span class="vg"><b>${g.line}.x</b><span>${gvItems(take)}</span></span>`);
+  }
+  if(other.length){
+    const take = other.slice(0, Math.max(0, left)); left -= take.length; hidden += other.length - take.length;
+    if(take.length) lines.push(`<span class="vg"><b>Прочее</b><span>${gvItems(take)}</span></span>`);
+  }
+  if(hidden > 0){
+    const id = ++gvSeq;
+    gvStore.set(id, { hidden, short: lines.join(""), full: gameVersionsHTML(list) });
+    if(gvStore.size > 300) gvStore.delete(gvStore.keys().next().value);   // старые списки уже не на экране
+    lines.push(gvBtn(id, false, hidden));
+  }
+  return lines.join("");
+}
+document.addEventListener("click", e=>{
+  const vb = e.target.closest && e.target.closest(".gv-v");
+  if(vb){
+    const sel = $("gv");
+    if(!sel) return;
+    e.preventDefault(); e.stopPropagation();
+    const v = vb.dataset.v, off = sel.value === v;
+    if(!off && ![...sel.options].some(o=> o.value === v)){ const o = document.createElement("option"); o.value = v; o.textContent = v; sel.appendChild(o); }
+    sel.value = off ? "" : v;
+    sel.dispatchEvent(new Event("change"));      // тот же путь, что и при выборе в списке: каталог обновится сам
+    if(modal.open && modalDetails){ modalShowAll = false; refreshModalFilter(); }   // карточка остаётся открытой, её списки подстраиваются под фильтр
+    toast(off ? "Фильтр по версии снят" : "Фильтр: версия " + v);
+    return;
+  }
+  const b = e.target.closest && e.target.closest(".vg-more[data-gv]");
+  if(!b) return;
+  const box = b.closest(".vm-gv"), rec = gvStore.get(+b.dataset.gv);
+  if(!box || !rec) return;
+  e.preventDefault(); e.stopPropagation();
+  const open = b.getAttribute("aria-expanded") !== "true";
+  box.innerHTML = (open ? rec.full : rec.short) + gvBtn(+b.dataset.gv, open, rec.hidden);
+  const nb = box.querySelector(".vg-more"); if(nb) nb.focus({ preventScroll: true });
+});
+/* один раз приводит строку версии в порядок (её же потом видит окно «Скачать») */
+function normalizeVersionRow(v){
+  if(v._norm) return v;
+  v._norm = true;
+  const s = splitGameList(v.gameList && v.gameList.length ? v.gameList : String(v.game || "").split(/,\s*/));
+  v._parts = s;
+  const lds = [...new Set([...(v.loaderList || []), ...s.loaders])].sort(loaderCmp);
+  v.loaderList = lds;
+  if(v.gameList && v.gameList.length) v.gameList = [...s.rel, ...s.other];   // без «OptiFine» и «Iris», по порядку
+  const joined = [...s.rel, ...s.other].join(", ");
+  if(joined) v.game = joined;
+  return v;
+}
+
 /* ---------- модалка мода (общая для всех страниц) ---------- */
 const modal = $("modal");
 let current = null;
@@ -859,10 +972,27 @@ function renderModalGallery(images){
   box.appendChild(wrap);
 }
 
+function modalGameVersionsHTML(d){
+  const gv = activeFilters().gv;
+  return gameVersionsHTML(gv ? d.gameVersions.filter(v=>v===gv) : d.gameVersions, 16) || "-";
+}
+/* фильтр по версии сменился, пока карточка открыта: обновляем её списки, не закрывая окно */
+function refreshModalFilter(){
+  const top = $("mGameVers");
+  if(top && modalDetails) top.innerHTML = modalGameVersionsHTML(modalDetails);
+  renderModalVersions();
+  // чипы версий в строках списка тоже должны показывать, какая версия сейчас выбрана
+  const cur = $("gv") ? $("gv").value : "";
+  modal.querySelectorAll(".gv-v").forEach(b=>{
+    const on = b.dataset.v === cur;
+    b.classList.toggle("on", on);
+    b.title = on ? "Снять фильтр по версии" : "Показать только версию " + b.dataset.v;
+  });
+}
 function renderModalVersions(){
   const box = $("mVersions");
   if(!box || !modalDetails) return;
-  const all = modalDetails.versions || [];
+  const all = (modalDetails.versions || []).map(normalizeVersionRow);
   if(!all.length){ box.innerHTML = ""; return; }
   const f = activeFilters();
   const hasFilter = !!(f.gv || f.loader);
@@ -873,12 +1003,16 @@ function renderModalVersions(){
   const title = filterOn ? `Версии для ${label} (${filtered.length} из ${all.length})` : `Все версии (${all.length})`;
   const toggle = hasFilter
     ? `<button class="btn" id="mVerToggle" type="button">${modalShowAll ? "Только по фильтру" : "Показать все версии"}</button>` : "";
-  const rows = list.length ? list.map((v,i)=>`
-      <div class="vrow">
+  const rows = list.length ? list.map((v,i)=>{
+      const gv = gameVersionsHTML([...v._parts.rel, ...v._parts.other]);
+      const lds = (v.loaderList || []).map(l=>`<span class="ld-chip">${ldIcon(l)}${LOADER_LABEL[l]||l}</span>`).join("");
+      return `
+      <div class="vrow vrow-rich">
         <span class="vn">${v.name}</span>
-        <span class="vm">${v.loaderList?.length ? v.loaderList.map(l=>LOADER_LABEL[l]||l).join(", ") + " · " : ""}${v.game} · ${dateRu(v.date)}</span>
+        <span class="vdate">${dateRu(v.date)}</span>
         ${v.file ? (window.LauncherUI?.isDesktop ? `<button type="button" class="vdl" data-vi="${i}">Скачать</button>` : `<a href="${v.file}" target="_blank" rel="noopener">Скачать</a>`) : ""}
-      </div>`).join("")
+        ${(lds || gv) ? `<div class="vm vm-rich">${lds ? `<div class="vm-ld">${lds}</div>` : ""}${gv ? `<div class="vm-gv">${gv}</div>` : ""}</div>` : ""}
+      </div>`; }).join("")
     : `<p class="filter-note">Для выбранных фильтров (${label}) файлов не найдено.</p>`;
   box.innerHTML = `<div><h4>${title}</h4>${toggle}<div class="vlist">${rows}</div></div>`;
   $("mVerToggle")?.addEventListener("click", ()=>{ modalShowAll = !modalShowAll; renderModalVersions(); });
@@ -934,7 +1068,7 @@ async function openModal(m){
           ? `<div class="spec"><span>Разрешение</span><b>${(m.categories||[]).filter(c=>/^\d+x\+?$/.test(c)).join(", ") || "-"}</b></div>`
           : `<div class="spec ${(d.loaders||[]).length>1 ? "wide" : ""}"><span>${m.kind === "shader" ? "Движки" : "Загрузчики"}</span><b class="ld-list">${(d.loaders||[]).map(l=>`<span class="ld-chip">${ldIcon(l)}${LOADER_LABEL[l]||l}</span>`).join("") || "-"}</b></div>`}
       </div>
-      ${(d.gameVersions||[]).length ? `<div><h4>Версии игры</h4><p style="color:var(--muted);font-size:14.5px">${(activeFilters().gv ? d.gameVersions.filter(v=>v===activeFilters().gv) : d.gameVersions.slice(0,16)).join(", ") || "-"}</p></div>` : ""}
+      ${(d.gameVersions||[]).length ? `<div><h4>Версии игры</h4><div class="vm-gv vm-gv-top" id="mGameVers">${modalGameVersionsHTML(d)}</div></div>` : ""}
       <div id="mVersions"></div>
       <div class="links">
         ${d.links.source ? `<a href="${d.links.source}" target="_blank" rel="noopener">Исходный код</a>` : ""}
@@ -968,6 +1102,131 @@ modal.addEventListener("click", e=>{ if(e.target === modal) modal.close(); });
 modal.addEventListener("close", ()=> window.LauncherUI?.setViewing?.(null));   // карточку закрыли, статус возвращается к странице
 
 /* ---------- инструкция по установке ---------- */
+
+/* ============================================================
+   Подсказки в поиске, как в Chrome: свои прошлые запросы (с часами, крестик убирает из истории)
+   и подсказки по названиям с Modrinth / Hangar. Стрелки ↑↓ подставляют вариант в строку, Enter ищет, Esc закрывает.
+   ============================================================ */
+const SG_KEY = "matrixl:search-history", SG_MAX = 20;
+const sgEsc = t=> String(t==null?"":t).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const sgHist = {
+  get(){ try{ const a = JSON.parse(localStorage.getItem(SG_KEY)||"[]"); return Array.isArray(a) ? a.filter(x=> typeof x==="string" && x) : []; }catch(e){ return []; } },
+  set(a){ try{ localStorage.setItem(SG_KEY, JSON.stringify(a.slice(0, SG_MAX))); }catch(e){} },
+  add(t){ t = String(t||"").trim().slice(0,80); if(!t) return; this.set([t, ...this.get().filter(x=> x.toLowerCase()!==t.toLowerCase())]); },
+  del(t){ this.set(this.get().filter(x=> x!==t)); }
+};
+const sgCache = new Map();
+async function fetchSuggestions(kind, text, signal){
+  const key = kind + "|" + text.toLowerCase();
+  if(sgCache.has(key)) return sgCache.get(key);
+  let titles = [];
+  if(kind === "plugin"){
+    const r = await fetch(`${Hangar.api}/projects?${new URLSearchParams({limit:"8", q:text, sort:"-downloads"})}`, {signal, headers:{Accept:"application/json"}});
+    if(r.ok){ const d = await r.json(); titles = (d.result||[]).map(p=> p.name); }
+  } else {
+    const p = new URLSearchParams({facets:JSON.stringify([[`project_type:${kind}`]]), index:"relevance", limit:"8", query:text});
+    const r = await fetch(`${Modrinth.api}/search?${p}`, {signal, headers:{Accept:"application/json"}});
+    if(r.ok){ const d = await r.json(); titles = (d.hits||[]).map(h=> h.title); }
+  }
+  const q = text.toLowerCase(), seen = new Set();
+  titles = titles.filter(t=> t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
+  // как в Chrome: сначала то, что начинается с набранного
+  titles = [...titles.filter(t=> t.toLowerCase().startsWith(q)), ...titles.filter(t=> !t.toLowerCase().startsWith(q))].slice(0, 6);
+  sgCache.set(key, titles);
+  return titles;
+}
+const SG_ICON_HIST = '<svg class="sg-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const SG_ICON_FIND = '<svg class="sg-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>';
+let sgOpen = null;   // подсказки, открытые сейчас (одни на всё окно)
+addEventListener("resize", ()=> sgOpen && sgOpen.place());
+addEventListener("scroll", ()=> sgOpen && sgOpen.place(), true);
+
+function attachSuggest(input, getKind){
+  if(!input) return;
+  document.querySelectorAll(".suggest").forEach(e=> e.remove());   // остатки от прошлой страницы
+  const box = document.createElement("div");
+  box.className = "suggest"; box.id = "suggestBox"; box.setAttribute("role","listbox"); box.hidden = true;
+  document.body.appendChild(box);
+  input.setAttribute("role","combobox"); input.setAttribute("aria-expanded","false"); input.setAttribute("aria-controls","suggestBox"); input.setAttribute("autocomplete","off");
+  let typed = input.value, items = [], net = [], act = -1, timer = 0, ctl = null;
+  const api = { place(){
+    if(box.hidden) return;
+    if(!input.isConnected){ close(); return; }
+    const r = (input.closest(".search") || input).getBoundingClientRect();
+    box.style.left = r.left + "px"; box.style.width = r.width + "px"; box.style.top = (r.bottom + 4) + "px";
+    box.style.maxHeight = Math.max(120, Math.min(340, innerHeight - r.bottom - 16)) + "px";
+  } };
+  const build = ()=>{
+    const q = typed.trim().toLowerCase();
+    const hist = sgHist.get().filter(h=> !q || h.toLowerCase().includes(q) && h.toLowerCase() !== q);
+    const histShown = q ? [...hist.filter(h=> h.toLowerCase().startsWith(q)), ...hist.filter(h=> !h.toLowerCase().startsWith(q))].slice(0,3) : hist.slice(0,8);
+    const have = new Set(histShown.map(h=> h.toLowerCase()));
+    items = [...histShown.map(t=>({t, hist:true})), ...net.filter(t=> !have.has(t.toLowerCase()) && t.toLowerCase() !== q).map(t=>({t, hist:false}))];
+  };
+  const paint = ()=>{
+    build();
+    if(!items.length){ box.hidden = true; input.setAttribute("aria-expanded","false"); return; }
+    const q = typed.trim();
+    box.innerHTML = items.map((it,i)=>{
+      const low = it.t.toLowerCase(), ql = q.toLowerCase();
+      const txt = !q ? sgEsc(it.t) : low.startsWith(ql) ? sgEsc(it.t.slice(0,q.length)) + "<b>" + sgEsc(it.t.slice(q.length)) + "</b>" : "<b>" + sgEsc(it.t) + "</b>";
+      return `<div class="sg-item${i===act?" act":""}" role="option" aria-selected="${i===act}" data-i="${i}">${it.hist ? SG_ICON_HIST : SG_ICON_FIND}<span class="sg-txt">${txt}</span>${it.hist ? `<button type="button" class="sg-x" data-x="${i}" title="Удалить из истории" aria-label="Удалить из истории">✕</button>` : ""}</div>`;
+    }).join("");
+    box.hidden = false; input.setAttribute("aria-expanded","true");
+    sgOpen = api; api.place();
+  };
+  function close(){ box.hidden = true; act = -1; input.setAttribute("aria-expanded","false"); clearTimeout(timer); if(ctl) ctl.abort(); if(sgOpen === api) sgOpen = null; }
+  const ask = ()=>{
+    clearTimeout(timer); if(ctl) ctl.abort();
+    const text = typed.trim();
+    if(text.length < 2){ net = []; return; }
+    timer = setTimeout(async ()=>{
+      ctl = new AbortController();
+      try{ const t = await fetchSuggestions(getKind(), text, ctl.signal); if(text === typed.trim() && document.activeElement === input){ net = t; paint(); } }
+      catch(e){ /* нет сети или запрос отменён: остаётся история */ }
+    }, 160);
+  };
+  const move = d=>{
+    act += d;
+    if(act < -1) act = items.length - 1;
+    if(act >= items.length) act = -1;
+    input.value = act < 0 ? typed : items[act].t;   // как в Chrome: выбранный вариант виден в строке
+    paint();
+    const el = box.querySelector(".sg-item.act"); if(el) el.scrollIntoView({block:"nearest"});
+  };
+  const pick = i=>{
+    const it = items[i]; if(!it) return;
+    input.value = typed = it.t; close();
+    input.dispatchEvent(new Event("input", {bubbles:true}));
+    input.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", bubbles:true, cancelable:true}));   // дальше как обычный Enter
+    input.focus();
+  };
+  input.addEventListener("input", ()=>{ typed = input.value; act = -1; net = []; paint(); ask(); });
+  input.addEventListener("focus", ()=>{ typed = input.value; act = -1; net = []; paint(); ask(); });
+  input.addEventListener("blur", ()=> setTimeout(()=>{ if(document.activeElement !== input) close(); }, 120));
+  input.addEventListener("keydown", e=>{
+    if(e.isComposing) return;
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      if(box.hidden){ typed = input.value; paint(); if(box.hidden) return; e.preventDefault(); return; }
+      e.preventDefault(); move(e.key === "ArrowDown" ? 1 : -1);
+    } else if(e.key === "Enter"){
+      sgHist.add(input.value); close();
+    } else if(e.key === "Escape" && !box.hidden){
+      e.preventDefault(); e.stopImmediatePropagation(); input.value = typed; close();
+    } else if(e.key === "Tab"){ close(); }
+  }, true);
+  box.addEventListener("mousedown", e=> e.preventDefault());   // фокус остаётся в строке поиска
+  box.addEventListener("click", e=>{
+    const x = e.target.closest("[data-x]");
+    if(x){ const it = items[+x.dataset.x]; if(it){ sgHist.del(it.t); paint(); } return; }
+    const row = e.target.closest(".sg-item"); if(row) pick(+row.dataset.i);
+  });
+  box.addEventListener("mousemove", e=>{
+    const row = e.target.closest(".sg-item"); if(!row) return;
+    const i = +row.dataset.i; if(i === act) return;
+    box.querySelector(".sg-item.act")?.classList.remove("act"); row.classList.add("act"); act = i;
+  });
+}
 
 /* ============================================================
    Страницы каталога: Моды / Плагины / Сборки
@@ -1005,8 +1264,7 @@ function renderCatalogPage(kind, opts){
 
   const content = $("content");
   content.innerHTML = `
-    <h1>${def.title}</h1>
-    <p class="page-lede">${def.lede}</p>
+    ${sectionHead(kind, def.title, def.lede)}
     ${kind==="modpacks" && window.mm ? `<p><button class="btn" id="openMrpack" type="button">Установить из файла (.mrpack или .zip)…</button></p>` : ""}
     <section class="panel">
       <div class="search-row">
@@ -1153,6 +1411,7 @@ function renderCatalogPage(kind, opts){
   const runSearch = ()=>{ clearTimeout(debounce); catalog.q = qi.value.trim(); loadCatalog(); };
   syncClear();
   qi.addEventListener("input", ()=>{ syncClear(); clearTimeout(debounce); debounce = setTimeout(runSearch, 300); });
+  attachSuggest(qi, ()=> ({mods:"mod", modpacks:"modpack", resourcepacks:"resourcepack", shaders:"shader", plugins:"plugin"})[kind] || "mod");
   qi.addEventListener("keydown", e=>{
     if(e.key === "Enter"){ e.preventDefault(); runSearch(); }
     if(e.key === "Escape" && qi.value){ e.preventDefault(); qClear.click(); }
@@ -1336,13 +1595,23 @@ function renderCatalogGrid(){
    Главная
    ============================================================ */
 const QUICK_ICONS = {
-  mods:`<path d="M12 2.8 20.5 7.4v9.2L12 21.2 3.5 16.6V7.4z"/><path d="M3.5 7.4 12 12l8.5-4.6"/><path d="M12 12v9.2"/><path d="M7.7 5.1l8.5 4.6"/><path d="M6.6 11.4l2 1.1v2.2l-2-1.1z"/><path d="M15.4 13.6l2-1.1v2.2l-2 1.1z"/>`,
-  plugins:`<path d="M10 3.5a2 2 0 0 1 4 0V6h3.5a1 1 0 0 1 1 1v3.5H21a2 2 0 0 1 0 4h-2.5V19a1 1 0 0 1-1 1H14v-2.5a2 2 0 0 0-4 0V20H6.5a1 1 0 0 1-1-1v-4.5H3a2 2 0 0 1 0-4h2.5V7a1 1 0 0 1 1-1H10z"/>`,
-  modpacks:`<path d="M12 2.8 21 7.3 12 11.8 3 7.3z"/><path d="M3 11.6l9 4.5 9-4.5"/><path d="M3 15.9l9 4.5 9-4.5"/><path d="M8.2 7.3 12 9.2l3.8-1.9"/><path d="M12 11.8v4.3"/>`,
-  resourcepacks:`<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H16a5 5 0 0 0 5-5c0-4.4-4-7.2-9-7.2z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>`,
-  shaders:`<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/>`,
-  favorites:`<path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z"/><path d="M12 7.5l1 2.1 2.3.3-1.7 1.6.4 2.3-2-1.1-2 1.1.4-2.3-1.7-1.6 2.3-.3z"/><path d="M19 3v3M17.5 4.5h3"/>`
+  mods: `<path d="M3 7l9-5 9 5-9 5z M3 7v10l9 5 9-5V7 M12 12v10 M7 5l10 5v4"/>`,
+  plugins: `<path d="M5 3l5 3-3 5-5-3z M14 12l6 3-3 6-6-3z M8 9l7 5 M15 3v5h5"/>`,
+  modpacks: `<path d="M2 8l10-5 10 5-10 5z M2 12l10 5 10-5 M2 16l10 5 10-5"/>`,
+  resourcepacks: `<path d="M3 5l7-2 5 3 6-2v15l-6 2-5-3-7 2z M10 3v15 M15 6v15"/>`,
+  shaders: `<path d="M2 18l6-8 4 5 3-4 7 7z M14 5a3 3 0 1 0 6 0 3 3 0 0 0-6 0z M5 21h14"/>`,
+  favorites: `<path d="M4 5h5l2 2h9v13H4z M12 10l1.2 2.2 2.5.5-1.8 1.8.3 2.5-2.2-1.1-2.2 1.1.3-2.5-1.8-1.8 2.5-.5z"/>`,
+  servers: `<path d="M3 4h18v6H3z M3 14h18v6H3z M6 7h2 M6 17h2 M15 7h3 M15 17h3"/>`,
+  settings: `<path d="M3 6h6m5 0h7 M3 12h12m5 0h1 M3 18h2m5 0h11 M9 4h5v4H9z M15 10h5v4h-5z M5 16h5v4H5z"/>`
 };
+function sectionHead(kind, title, description = "") {
+  const icon = (QUICK_ICONS[kind] || "").replace(/<path /g, '<path pathLength="1" ');
+  return `<header class="section-cover" data-kind="${kind}">
+    <div class="cover-copy"><h1>${title}</h1>${description ? `<p class="page-lede">${description}</p>` : ""}</div>
+    <div class="cover-deco" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="section-emblem" aria-hidden="true"><span class="emblem-ring"></span><svg viewBox="0 0 24 24">${icon}</svg></div>
+  </header>`;
+}
 const FEATURES = [
   {ico:"⛏️", title:"Всегда актуально", text:"Карточки берутся прямо с площадок при каждом запросе, так что данные всегда свежие."},
   {ico:"🧭", title:"Четыре источника сразу", text:"Modrinth, CurseForge, Hangar и SpigotMC. Если проект есть на нескольких площадках, он показывается одной карточкой."},
@@ -1357,7 +1626,7 @@ function renderHome(){
     <section class="hero-home">
       <div class="hero-flex">
         <div class="hero-content">
-          <h1>MatrixL</h1>
+          <span class="edition-label">Minecraft Java Edition</span><h1>MatrixL</h1>
           <div class="search-row home-search">
             <label class="search">
               <span class="search-icon" aria-hidden="true"></span>
@@ -1365,9 +1634,7 @@ function renderHome(){
             </label>
           </div>
         </div>
-        <div class="hero-art-frame">
-          <img class="hero-art" src="logo.png" alt="MatrixL">
-        </div>
+
       </div>
     </section>
 
@@ -1404,6 +1671,7 @@ function renderHome(){
     </section>
   `;
 
+  attachSuggest($("homeSearch"), ()=> "mod");
   $("homeSearch").addEventListener("keydown", e=>{
     if(e.key === "Enter"){ setPage("mods", {q:e.target.value.trim()}); }
   });
@@ -1482,11 +1750,11 @@ function renderFavoritesPage(){
   const col = favView === "all" ? null : collections.get(favView);
   const list = col ? everything.filter(m=> col.ids.includes(m.id)) : everything;
   const installable = list.filter(m=> (m.source==="modrinth" || m.source==="curseforge") && m.kind==="mod").length;
+  const dlable = list.filter(m=> (m.source==="modrinth" || m.source==="curseforge") && ["mod","resourcepack","shader"].includes(m.kind)).length;
   const safe = cmEsc;
   // плашки создания сборки видны всегда, даже когда в избранном ещё ничего нет
   content.innerHTML = `
-    <h1>Избранное</h1>
-    <p class="page-lede">Здесь лежат сохранённые вами карточки. Собирайте из них свои сборки и проверяйте, подходят ли моды друг к другу.</p>
+    ${sectionHead("favorites", "Избранное", "Здесь лежат сохранённые вами карточки. Собирайте из них свои сборки и проверяйте, подходят ли моды друг к другу.")}
     <div class="chips fav-tabs" id="favTabs" role="tablist">
       <button class="chip" role="tab" data-view="all" aria-pressed="${favView==="all"}">Все (${everything.length})</button>
       ${builds.map(c=>`<button class="chip" role="tab" data-view="${safe(c.id)}" aria-pressed="${favView===c.id}">${safe(c.name)} (${c.ids.length})</button>`).join("")}
@@ -1495,7 +1763,8 @@ function renderFavoritesPage(){
     ${builds.length ? "" : `<p class="coll-hint">Сборка это ваш набор модов. Его можно проверить на совместимость и установить в Minecraft одной кнопкой. Введите название и нажмите «Создать сборку», моды можно добавить позже.</p>`}
     <div class="meta-row"><div class="count">${list.length} ${col ? "в сборке «"+safe(col.name)+"»" : "сохранено"}</div>
       <div class="meta-right">
-        ${window.mm && installable ? `<button class="btn primary" id="favInstall" type="button">Установить всё в Minecraft (${installable})</button>` : ""}
+        ${window.mm && dlable ? `<button class="btn primary" id="favDlAll" type="button">Скачать всё (${dlable})</button>` : ""}
+        ${window.mm && installable ? `<button class="btn" id="favInstall" type="button">Установить всё в Minecraft (${installable})</button>` : ""}
         ${col ? `<button class="btn" id="collRename" type="button">Переименовать</button><button class="btn danger" id="collDelete" type="button">Удалить сборку</button>`
               : everything.length ? `<button class="btn danger" id="clearFavs" type="button">Очистить всё</button>` : ""}
       </div></div>
@@ -1537,6 +1806,7 @@ function renderFavoritesPage(){
     if(c){ favView = c.id; toast(`Сборка «${c.name}» создана`); renderFavoritesPage(); }
     else e.target.querySelector("input").focus();
   });
+  $("favDlAll")?.addEventListener("click", ()=> window.LauncherUI?.downloadAll?.(list, col ? col.name : "Всё избранное"));
   $("favInstall")?.addEventListener("click", ()=> window.LauncherUI?.installMany?.(list, col ? col.name : "Всё избранное"));
   $("clearFavs")?.addEventListener("click", async ()=>{
     if(!await window.UI.confirm({title:"Очистить избранное?", text:"Все сохранённые карточки будут удалены.", ok:"Удалить всё", danger:true})) return;
@@ -1592,9 +1862,10 @@ function renderSettingsPage(){
   const defSort = getDefaultSort();
   const lang = getLang();
   content.innerHTML = `
-    <h1>Настройки</h1>
-    <p class="page-lede">Настройки хранятся на этом компьютере и на данные модов не влияют.</p>
-    <div class="settings-grid">
+    ${sectionHead("settings", "Настройки", "Настройки хранятся на этом компьютере и на данные модов не влияют.")}
+    <section class="set-sec">
+      <h2 class="set-sec-h">Внешний вид</h2>
+      <div class="settings-grid">
       <div class="setting-card">
         <h3>Язык интерфейса</h3>
         <p>Язык лаунчера: русский или английский.</p>
@@ -1614,6 +1885,45 @@ function renderSettingsPage(){
             </button>`).join("")}
         </div>
       </div>
+      ${window.mm && window.AppBg ? window.AppBg.cardHTML() : ""}
+      ${window.mm ? `<div class="setting-card" id="stIntro">
+        <h3>Интро при запуске</h3>
+        <p>Короткая заставка с логотипом при открытии лаунчера. Её можно пропустить кликом или любой клавишей.</p>
+        <button type="button" class="dc-toggle" id="introOn" role="switch" aria-checked="true" aria-describedby="introStat">
+          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg></span>
+          <span class="dc-txt"><b>Показывать интро при запуске</b><small id="introStat">Загружаю…</small></span>
+          <span class="dc-track" aria-hidden="true"><i></i></span>
+        </button>
+      </div>` : ""}
+      </div>
+    </section>
+    ${window.mm ? `<section class="set-sec">
+      <h2 class="set-sec-h">Лаунчер и игра</h2>
+      <div class="settings-grid">
+      ${window.mm ? `<div class="setting-card" id="stHide">
+        <h3>Сворачивание лаунчера</h3>
+        <p>После успешного запуска игры лаунчер прячется и пропадает с панели задач. Он остаётся скрытым, пока игра не будет закрыта полностью, и появляется снова после её закрытия.</p>
+        <button type="button" class="dc-toggle" id="hideOn" role="switch" aria-checked="false" aria-describedby="hideStat">
+          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
+          <span class="dc-txt"><b>Сворачивать лаунчер при запуске игры</b><small id="hideStat">Загружаю…</small></span>
+          <span class="dc-track" aria-hidden="true"><i></i></span>
+        </button>
+      </div>` : ""}
+      ${window.mm ? `<div class="setting-card" id="stDiscord">
+        <h3>Статус в Discord</h3>
+        <p>В профиле Discord видно, что вы делаете в лаунчере. В игре показываются режим (главное меню, одиночная игра, сервер), местоположение, биом, погода, а на серверах ещё и число игроков онлайн.</p>
+        <button type="button" class="dc-toggle" id="dcOn" role="switch" aria-checked="true" aria-describedby="dcStat">
+          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.3 5.4A17 17 0 0 0 15 4.1l-.2.4a15.6 15.6 0 0 1 3.9 1.9 14.7 14.7 0 0 0-13.4 0 15.6 15.6 0 0 1 3.9-1.9l-.2-.4a17 17 0 0 0-4.3 1.3C2.1 9.5 1.4 13.4 1.7 17.2a17.2 17.2 0 0 0 5.3 2.7l1.1-1.8a11 11 0 0 1-1.7-.8l.4-.3a12.3 12.3 0 0 0 10.4 0l.4.3c-.5.3-1.1.6-1.7.8l1.1 1.8a17.2 17.2 0 0 0 5.3-2.7c.4-4.4-.7-8.3-3-11.8zM8.7 14.9c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2zm6.6 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2z"/></svg></span>
+          <span class="dc-txt"><b>Показывать статус в Discord</b><small id="dcStat">Загружаю…</small></span>
+          <span class="dc-track" aria-hidden="true"><i></i></span>
+        </button>
+        <div class="upd-actions"><button type="button" class="btn" id="dcAdv">Расширенные настройки</button></div>
+      </div>` : ""}
+      </div>
+    </section>` : ""}
+    <section class="set-sec">
+      <h2 class="set-sec-h">Каталог</h2>
+      <div class="settings-grid">
       <div class="setting-card">
         <h3>Перевод описаний</h3>
         <p>Описания модов и плагинов из Modrinth/CurseForge/Hangar/SpigotMC чаще всего на английском, поэтому мы переводим их автоматически.</p>
@@ -1637,34 +1947,11 @@ function renderSettingsPage(){
         <p>Сейчас сохранено: ${favorites.size}.</p>
         <button class="btn danger" id="stClearFavs" ${favorites.size?"":"disabled"}>Очистить избранное</button>
       </div>
-      ${window.mm ? `<div class="setting-card" id="stDiscord">
-        <h3>Статус в Discord</h3>
-        <p>В профиле Discord видно, что вы делаете в лаунчере. В игре показываются режим (главное меню, одиночная игра, сервер), местоположение, биом, погода, а на серверах ещё и число игроков онлайн.</p>
-        <button type="button" class="dc-toggle" id="dcOn" role="switch" aria-checked="true" aria-describedby="dcStat">
-          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19.3 5.4A17 17 0 0 0 15 4.1l-.2.4a15.6 15.6 0 0 1 3.9 1.9 14.7 14.7 0 0 0-13.4 0 15.6 15.6 0 0 1 3.9-1.9l-.2-.4a17 17 0 0 0-4.3 1.3C2.1 9.5 1.4 13.4 1.7 17.2a17.2 17.2 0 0 0 5.3 2.7l1.1-1.8a11 11 0 0 1-1.7-.8l.4-.3a12.3 12.3 0 0 0 10.4 0l.4.3c-.5.3-1.1.6-1.7.8l1.1 1.8a17.2 17.2 0 0 0 5.3-2.7c.4-4.4-.7-8.3-3-11.8zM8.7 14.9c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2zm6.6 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2z"/></svg></span>
-          <span class="dc-txt"><b>Показывать статус в Discord</b><small id="dcStat">Загружаю…</small></span>
-          <span class="dc-track" aria-hidden="true"><i></i></span>
-        </button>
-        <div class="upd-actions"><button type="button" class="btn" id="dcAdv">Расширенные настройки</button></div>
-      </div>` : ""}
-      ${window.mm ? `<div class="setting-card" id="stIntro">
-        <h3>Интро при запуске</h3>
-        <p>Короткая заставка с логотипом при открытии лаунчера. Её можно пропустить кликом или любой клавишей.</p>
-        <button type="button" class="dc-toggle" id="introOn" role="switch" aria-checked="true" aria-describedby="introStat">
-          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg></span>
-          <span class="dc-txt"><b>Показывать интро при запуске</b><small id="introStat">Загружаю…</small></span>
-          <span class="dc-track" aria-hidden="true"><i></i></span>
-        </button>
-      </div>` : ""}
-      ${window.mm ? `<div class="setting-card" id="stHide">
-        <h3>Сворачивание лаунчера</h3>
-        <p>После успешного запуска игры лаунчер прячется и пропадает с панели задач. Он остаётся скрытым, пока игра не будет закрыта полностью, и появляется снова после её закрытия.</p>
-        <button type="button" class="dc-toggle" id="hideOn" role="switch" aria-checked="false" aria-describedby="hideStat">
-          <span class="dc-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></span>
-          <span class="dc-txt"><b>Сворачивать лаунчер при запуске игры</b><small id="hideStat">Загружаю…</small></span>
-          <span class="dc-track" aria-hidden="true"><i></i></span>
-        </button>
-      </div>` : ""}
+      </div>
+    </section>
+    <section class="set-sec">
+      <h2 class="set-sec-h">Система</h2>
+      <div class="settings-grid">
       ${window.mm ? `<div class="setting-card" id="stUpdate">
         <h3>Обновление лаунчера</h3>
         <p id="upStat" role="status">Загружаю…</p>
@@ -1714,7 +2001,8 @@ function renderSettingsPage(){
           <a href="https://www.spigotmc.org" target="_blank" rel="noopener">SpigotMC ↗</a>
         </div>
       </div>
-    </div>
+      </div>
+    </section>
   `;
 
   $("uiLangSeg").querySelectorAll("button").forEach(b=> b.addEventListener("click", ()=>{
@@ -1762,6 +2050,8 @@ function renderSettingsPage(){
       if(want) setTimeout(load, 2500);   // подключение к Discord занимает мгновение
     });
   }
+
+  if(window.mm && window.AppBg) window.AppBg.bind();
 
   if(window.mm && $("stIntro")){
     const btn = $("introOn");
@@ -1941,6 +2231,7 @@ const DC_OPTS = [
   ]},
   {g:"Многопользовательская игра", items:[
     {k:"showHost",    t:"Сервер",              d:"Адрес сервера. Если выключено, показывается только название сервера из списка игры"},
+    {k:"showServerIcon", t:"Иконка сервера",    d:"Вместо логотипа лаунчера показывать иконку сервера, если она у него есть (логотип остаётся маленьким значком). Иконка берётся по адресу сервера через mcstatus.io, поэтому работает только при включённом пункте «Сервер»"},
     {k:"showPlayers", t:"Игроков онлайн",      d:"Сколько игроков сейчас на сервере: «(128 из 500)». Лаунчер запрашивает статус сервера так же, как список серверов игры"}
   ]},
   {g:"Состояние игрока", items:[
@@ -2109,13 +2400,12 @@ function renderServersPage(){
   clearInterval(srvState.timer); srvState.timer = 0;
   const content = $("content");
   if(!window.mm){
-    content.innerHTML = `<h1>Мониторинг</h1><div class="state">Проверка серверов работает только в приложении MatrixL.</div>`;
+    content.innerHTML = `${sectionHead("servers", "Мониторинг")}<div class="state">Проверка серверов работает только в приложении MatrixL.</div>`;
     return;
   }
   srvLoad();
   content.innerHTML = `
-    <h1>Мониторинг</h1>
-    <p class="page-lede">Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд, автообновление можно отключить.</p>
+    ${sectionHead("servers", "Мониторинг", "Добавьте адрес сервера Minecraft, и лаунчер покажет, включён ли он, сколько игроков сейчас играет и какая у него задержка. Данные обновляются сами каждые 30 секунд, автообновление можно отключить.")}
     <form class="srv-add" id="srvAdd" autocomplete="off">
       <label class="field"><span>Адрес сервера</span><input type="text" id="srvAddr" maxlength="280" placeholder="play.example.net или 123.45.67.89:25565" spellcheck="false" aria-label="Адрес сервера"></label>
       <label class="field"><span>Название (необязательно)</span><input type="text" id="srvName" maxlength="40" placeholder="Мой сервер" aria-label="Название сервера"></label>

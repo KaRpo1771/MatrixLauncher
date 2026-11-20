@@ -68,7 +68,10 @@ class DiscordPresence {
       details: clip(a.details), state: clip(a.state),
       ...(a.start ? { timestamps: { start: Math.floor(a.start / 1000) } } : {}),
       ...(Array.isArray(a.party) && a.party[1] > 0 ? { party: { id: 'matrixl-server', size: [Math.max(0, a.party[0] | 0), Math.max(1, a.party[1] | 0)] } } : {}),
-      assets: { large_image: LOGO_URL || 'logo', large_text: clip(a.largeText) || 'MatrixL' }
+      assets: /^https:\/\/\S{1,248}$/.test(a.serverIcon || '')
+        // на сервере: большая картинка это иконка сервера, а логотип лаунчера и сборка уходят в маленький значок
+        ? { large_image: a.serverIcon, large_text: clip(a.serverText) || 'Minecraft', small_image: LOGO_URL || 'logo', small_text: clip(a.largeText) || 'MatrixL' }
+        : { large_image: LOGO_URL || 'logo', large_text: clip(a.largeText) || 'MatrixL' }
     } : null;
     this._flush();
   }

@@ -64,6 +64,17 @@ function init(root) {
   DIRS.installers = path.join(root, 'installers');
   DIRS.packs = path.join(root, 'packs');
   for (const d of [DIRS.installers, DIRS.packs]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* занято, уберём в следующий раз */ } }
+  purgeTempInstances();
+}
+/* временные экземпляры (их создаёт «Скачать всё → ZIP») живут только на время сборки архива; если лаунчер закрыли посреди работы, убираем остатки */
+function purgeTempInstances() {
+  try {
+    const all = loadInstances();
+    const tmp = all.filter(i => i.tmp);
+    if (tmp.length) saveInstances(all.filter(i => !i.tmp));
+    for (const i of tmp) { try { fs.rmSync(instDir(i.id), { recursive: true, force: true }); } catch { /* занято */ } }
+    for (const n of fs.readdirSync(DIRS.instances)) if (n.startsWith('.dlall-')) { try { fs.rmSync(path.join(DIRS.instances, n), { recursive: true, force: true }); } catch { /* занято */ } }
+  } catch { /* первого запуска ещё нет файлов */ }
 }
 
 /* ---------- вывод процессов: UTF-8, а если не получается, кодовая страница Windows ---------- */
@@ -727,9 +738,22 @@ function saveInstances(list) {
   fs.renameSync(tmp, instFile());
 }
 function instDir(id) { return path.join(DIRS.instances, id); }
+/* Время в игре: считается с момента, когда появилось окно Minecraft, и до закрытия процесса */
+function recordPlay(id, ms) {
+  try {
+    if (!(ms > 0)) return;
+    const all = loadInstances();
+    const rec = all.find(i => i.id === id);
+    if (!rec) return;
+    rec.playMs = (rec.playMs || 0) + Math.round(ms);
+    rec.sessions = (rec.sessions || 0) + 1;
+    rec.lastPlayed = Date.now();
+    saveInstances(all);
+  } catch { /* статистика не должна мешать закрытию игры */ }
+}
 function slugify(s) { return String(s || 'minecraft').toLowerCase().replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'minecraft'; }
 
-function listInstances() { return loadInstances(); }
+function listInstances() { return loadInstances().filter(i => !i.tmp); }   // временные (для ZIP из избранного) не показываем
 function getInstance(id) {
   const i = loadInstances().find(x => x.id === id);
   if (!i) throw new Error('Установка не найдена');
@@ -920,7 +944,7 @@ let watchCb = null;
 function watchInstances(cb) { watchCb = cb; syncWatchers(); }
 function syncWatchers() {
   if (!watchCb) return;
-  const ids = new Set(loadInstances().map(i => i.id));
+  const ids = new Set(loadInstances().filter(i => !i.tmp).map(i => i.id));
   for (const [id, w] of watchers) if (!ids.has(id)) { try { w.close(); } catch { /* уже закрыт */ } watchers.delete(id); }
   for (const id of ids) {
     if (watchers.has(id)) continue;
@@ -1087,7 +1111,9 @@ if([MMW]::Idle() -ge 120){$a='1'}else{$a='0'};if($a -ne $la){$la=$a;[Console]::O
       minPs.on('error', () => { minPs = null; });
     } catch { minPs = null; }
   };
-  const markReady = () => { if (ready) return; ready = true; stopWatch(); if (onReady) { try { onReady(); } catch { /* не критично */ } } startMinWatch(); };
+  let readyAt = 0, played = false;
+  const finishPlay = () => { if (played) return; played = true; if (readyAt) recordPlay(inst.id, Date.now() - readyAt); };
+  const markReady = () => { if (ready) return; ready = true; readyAt = Date.now(); stopWatch(); if (onReady) { try { onReady(); } catch { /* не критично */ } } startMinWatch(); };
   const READY_RE = /Backend library: LWJGL|Reloading ResourceManager|OpenAL initialized|Sound engine started|Created: \d+x\d+/i;
   const logLine = l => { onLog(l); if (!ready && READY_RE.test(l)) markReady(); };
   if (OS === 'windows' && child.pid) {
@@ -1103,8 +1129,8 @@ if([MMW]::Idle() -ge 120){$a='1'}else{$a='0'};if($a -ne $la){$la=$a;[Console]::O
   const out = lineFeeder(logLine), err = lineFeeder(logLine);
   child.stdout.on('data', out.push);
   child.stderr.on('data', err.push);
-  child.on('error', e => { stopWatch(); stopMin(); running.delete(inst.id); onLog('Ошибка запуска: ' + e.message); onExit(-1); });
-  child.on('close', code => { stopWatch(); stopMin(); out.flush(); err.flush(); running.delete(inst.id); onExit(code); });
+  child.on('error', e => { stopWatch(); stopMin(); finishPlay(); running.delete(inst.id); onLog('Ошибка запуска: ' + e.message); onExit(-1); });
+  child.on('close', code => { stopWatch(); stopMin(); finishPlay(); out.flush(); err.flush(); running.delete(inst.id); onExit(code); });
   return { pid: child.pid };
 }
 function isRunning(id) { return running.has(id); }
@@ -2756,8 +2782,113 @@ async function exportMrpack(id, dest, report, opts = {}) {
   return { file: dest, size, linked: files.length, bundled: bundled.length, configs: extra.length, disabled, lookupFailed };
 }
 
+/* ---------- «Скачать всё» из избранного ----------
+   items: [{ kind: mod | resourcepack | shader, source: modrinth | curseforge, slug (у CurseForge это id проекта), title }].
+   Моды идут в mods (вместе с обязательными зависимостями), ресурспаки в resourcepacks, шейдеры в shaderpacks.
+   Ошибка одной карточки не останавливает остальные: в ответе у каждой есть ok / error. */
+const BATCH_KINDS = new Set(['mod', 'resourcepack', 'shader']);
+function batchItems(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).map(x => ({
+    kind: String(x && x.kind || ''), source: x && x.source === 'curseforge' ? 'curseforge' : 'modrinth',
+    slug: String(x && x.slug || ''), title: String(x && x.title || x && x.slug || '')
+  })).filter(x => BATCH_KINDS.has(x.kind) && x.slug && !seen.has(x.kind + x.source + x.slug) && seen.add(x.kind + x.source + x.slug));
+}
+
+async function installBatch({ instanceId, items }, report) {
+  getInstance(instanceId);
+  const list = batchItems(items);
+  if (!list.length) throw new Error('Нечего скачивать');
+  const mods = list.filter(x => x.kind === 'mod'), res = list.filter(x => x.kind !== 'mod');
+  const total = list.length, out = [];
+  if (mods.length) {
+    const r = await installMods({ instanceId, slugs: mods.map(m => ({ source: m.source, slug: m.slug })) },
+      (t, p, x) => (t ? report(t, (p || 0) * mods.length / total) : report(null, null, x)));
+    for (const m of mods) {
+      const hit = r.find(y => y.slug === m.slug && y.source === m.source);
+      out.push({ kind: 'mod', title: m.title, ok: !!(hit && hit.ok), error: hit && !hit.ok ? hit.error : (hit ? '' : 'Не обработано') });
+    }
+  }
+  for (let i = 0; i < res.length; i++) {
+    const it = res[i];
+    report(`${it.kind === 'shader' ? 'Шейдер' : 'Ресурспак'} ${i + 1} из ${res.length}: ${it.title}`, (mods.length + i) / total);
+    try {
+      checkCancel();
+      await installResource({ instanceId, kind: it.kind, source: it.source, slug: it.slug, cfId: it.source === 'curseforge' ? it.slug : undefined },
+        (t, p, x) => (x ? report(null, null, x) : null));
+      out.push({ kind: it.kind, title: it.title, ok: true, error: '' });
+    } catch (e) {
+      if (e && e.message === CANCELLED) throw e;
+      checkCancel();
+      out.push({ kind: it.kind, title: it.title, ok: false, error: e.message });
+    }
+  }
+  report('Готово', 1);
+  return out;
+}
+
+/* ZIP без «каши»: в корне архива только mods / resourcepacks / shaderpacks (их можно сразу бросить в папку .minecraft)
+   и README.txt с версией игры, загрузчиком и списком того, что не скачалось. Файлы подбираются под mc и loader,
+   для этого создаётся скрытый временный экземпляр (без установки игры), который удаляется после упаковки. */
+async function downloadAllZip({ items, mc, loader, dest }, report) {
+  if (!dest || !/\.zip$/i.test(dest)) throw new Error('Архив должен иметь расширение .zip');
+  if (!mc) throw new Error('Выберите версию Minecraft');
+  const ld = LOADERS.includes(loader) ? loader : 'vanilla';
+  const list = batchItems(items);
+  if (!list.length) throw new Error('Нечего скачивать');
+  if (ld === 'vanilla' && list.some(x => x.kind === 'mod')) throw new Error('Для модов выберите загрузчик: Fabric, Quilt, Forge или NeoForge');
+
+  const id = `.dlall-${Date.now()}`, dir = instDir(id);
+  const all = loadInstances();
+  all.push({ id, name: 'tmp', mc, loader: ld, loaderVersion: null, tmp: true, created: new Date().toISOString(), mods: [], packs: [] });
+  saveInstances(all);
+  const tmpZip = dest + '.part';
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const results = await installBatch({ instanceId: id, items: list }, (t, p, x) => report(t, p == null ? null : p * 0.9, x));
+    checkCancel();
+
+    const files = [];
+    for (const sub of ['mods', 'resourcepacks', 'shaderpacks']) {
+      let names = []; try { names = await fsp.readdir(path.join(dir, sub), { withFileTypes: true }); } catch { continue; }
+      for (const d of names) if (d.isFile() && /\.(jar|zip)$/i.test(d.name)) files.push({ rel: `${sub}/${d.name}`, abs: path.join(dir, sub, d.name) });
+    }
+    if (!files.length) { const f = results.find(r => !r.ok && r.error); throw new Error('Ничего не скачалось: ' + (f ? f.error : 'нет подходящих версий')); }
+
+    report('Собираю архив', 0.92);
+    const bad = results.filter(r => !r.ok);
+    const readme = [
+      'Собрано в MatrixL из избранного.',
+      `Minecraft: ${mc}`, `Загрузчик: ${ld === 'vanilla' ? 'без модов' : ld}`, '',
+      'mods — моды (вместе с обязательными зависимостями), resourcepacks — ресурспаки, shaderpacks — шейдеры.',
+      'Содержимое папок можно скопировать в папку .minecraft, в одноимённые папки.',
+      ...(bad.length ? ['', `Не скачалось (${bad.length}):`, ...bad.map(b => `- ${b.title}: ${b.error}`)] : [])
+    ].join('\r\n') + '\r\n';
+    const h = await fsp.open(tmpZip, 'w');
+    try {
+      const zw = new ZipWriter(h);
+      for (let i = 0; i < files.length; i++) {
+        checkCancel();
+        await zw.add(files[i].rel, await fsp.readFile(files[i].abs), true);   // jar и zip уже сжаты, храним как есть
+        report(`Собираю архив: ${i + 1} из ${files.length}`, 0.92 + 0.07 * (i + 1) / files.length);
+      }
+      await zw.add('README.txt', Buffer.from(readme, 'utf8'));
+      await zw.finish();
+    } finally { await h.close(); }
+    await fsp.rm(dest, { force: true });
+    await fsp.rename(tmpZip, dest);
+    const size = (await fsp.stat(dest)).size;
+    report('Готово', 1);
+    return { file: dest, size, files: files.length, results };
+  } finally {
+    await fsp.rm(tmpZip, { force: true }).catch(() => {});
+    saveInstances(loadInstances().filter(i => i.id !== id));
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 module.exports = {
-  exportMrpack, checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
+  installBatch, downloadAllZip, exportMrpack, checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
   installModFile, installResource, installResourceFile, listResources,
   init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,

@@ -66,11 +66,21 @@
      Скин берётся в главном процессе (Mojang, Ely.by), у оффлайн-аккаунта рисуется Стив. */
   const STEVE_PAL = { H: '#4a3020', S: '#b78a68', W: '#ffffff', E: '#3d3a8a', N: '#8d5d41', M: '#6e3f2d' };
   const STEVE = ['HHHHHHHH', 'HHHHHHHH', 'HSSSSSSH', 'SWESSEWS', 'SSSSSSSS', 'SSSNNSSS', 'SSNMMNSS', 'SSSSSSSS'];
+  /* Голова рисуется один раз в маленькой программной канвасе и дальше живёт как обычная картинка (PNG data: URL).
+     Живой <canvas> зависит от видеокарты: пока на фоне идёт видео или GIF, он мог остаться пустым или показать мусор. */
+  const headCache = new Map();   // скин (data: URL) → готовая голова (data: URL)
+  const mkCtx = () => {
+    const c = document.createElement('canvas'); c.width = c.height = 8;
+    return { c, x: c.getContext('2d', { willReadFrequently: true }) };
+  };
+  const headImg = url => { const im = new Image(); im.className = 'skin-head'; im.alt = ''; im.draggable = false; im.src = url; return im; };
   function steveHead() {
-    const c = document.createElement('canvas'); c.width = c.height = 8; c.className = 'skin-head';
-    const x = c.getContext('2d');
-    STEVE.forEach((row, y) => [...row].forEach((ch, i) => { x.fillStyle = STEVE_PAL[ch]; x.fillRect(i, y, 1, 1); }));
-    return c;
+    if (!headCache.has('')) {
+      const { c, x } = mkCtx();
+      STEVE.forEach((row, y) => [...row].forEach((ch, i) => { x.fillStyle = STEVE_PAL[ch]; x.fillRect(i, y, 1, 1); }));
+      headCache.set('', c.toDataURL('image/png'));
+    }
+    return headImg(headCache.get(''));
   }
   const loadImg = src => new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = src; });
   function avatar(a, cls) {
@@ -79,17 +89,21 @@
   }
   async function headCanvas(skin) {
     if (!skin) return steveHead();
-    const img = await loadImg(skin);
-    const c = document.createElement('canvas'); c.width = c.height = 8; c.className = 'skin-head';
-    const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
-    const k = img.width / 64;
-    x.drawImage(img, 8 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);            // лицо
-    x.drawImage(img, 40 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);           // второй слой (шапка)
-    return c;
+    if (!headCache.has(skin)) {
+      const img = await loadImg(skin);
+      const { c, x } = mkCtx(); x.imageSmoothingEnabled = false;
+      const k = img.width / 64;
+      x.drawImage(img, 8 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);            // лицо
+      x.drawImage(img, 40 * k, 8 * k, 8 * k, 8 * k, 0, 0, 8, 8);           // второй слой (шапка)
+      if (headCache.size > 40) headCache.delete(headCache.keys().next().value);
+      headCache.set(skin, c.toDataURL('image/png'));
+    }
+    return headImg(headCache.get(skin));
   }
   async function paintHead(el, v) {
     try { const c = await headCanvas(v && v.skin); el.textContent = ''; el.appendChild(c); el.dataset.done = '1'; } catch (e) { /* остаётся буква */ }
   }
+  let headRetry = 0;
   function paintSkins(root) {
     (root || document).querySelectorAll('[data-head]').forEach(async el => {
       const id = el.dataset.head, acc = S.mcs.find(m => m.id === id);
@@ -100,11 +114,18 @@
       if (!h) {
         h = S.heads[id] = { pending: call('skin:head', id).then(v => { S.heads[id] = v; return v; }, () => { S.heads[id] = { fail: Date.now() }; return null; }) };
       }
-      if (h.fail) return;
+      if (h.fail) {   // не вышло (сеть, лимит Mojang): повторим сами, чтобы буква не оставалась навсегда
+        if (!headRetry) headRetry = setTimeout(() => { headRetry = 0; paintSkins(); }, 62000);
+        return;
+      }
       const v = h.pending ? await h.pending : h;
       if (v) paintHead(el, v);
+      else if (!headRetry) headRetry = setTimeout(() => { headRetry = 0; paintSkins(); }, 62000);
     });
   }
+  // окно вернулось на экран (свернули, закрыли игру): перерисовываем головы заново, это дёшево
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) paintSkins(); });
+  window.addEventListener('focus', () => paintSkins());
   /* скин поменялся: обновляем значки во всех местах */
   function setHead(id, v) { S.heads[id] = { skin: v.skin, slim: !!v.slim }; document.querySelectorAll('[data-head]').forEach(el => { if (el.dataset.head === id) paintHead(el, S.heads[id]); }); }
 
@@ -256,6 +277,7 @@
       if (p.log) return;
       if (p.key === 'mod' && p.file) { dlUpdate(p); if (S.ofFile && p.file === S.ofFile) ofProgress(p); }
       if (p.key === 'create') { if (!(S.packBusy && S.dlg && S.dlg.kind === 'settings')) setProgress('lcBar', 'lcStat', p.text, p.pct); setProgress('lcPackBar', 'lcPackStat', p.text, p.pct); setProgress('lcCopyBar', 'lcCopyStat', p.text, p.pct); setProgress('lcExportBar', 'lcExportStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
+      else if (p.key === 'dlall') { taskProgress('task:mod', p.text, p.pct); }
       else if (p.key === 'many') { setProgress('lcManyBar', 'lcManyStat', p.text, p.pct); taskProgress('task:mod', p.text, p.pct); }
       else if (p.key === 'mod') { setProgress('lcModBar', 'lcModStat', p.text, p.pct); if (p.text) taskProgress('task:mod', p.text, p.pct); }
       else if (p.key && p.key.startsWith('launch:')) setProgress('lcPlayBar', 'lcPlayStat', p.text, p.pct);
@@ -380,36 +402,54 @@
   }
 
   /* ---------------- главная = лаунчер ---------------- */
+  /* «12 ч 30 мин», «45 мин», «меньше минуты» */
+  function playTime(ms) {
+    const m = Math.floor((ms || 0) / 60000);
+    if (m < 1) return 'меньше минуты';
+    if (m < 60) return `${m} мин`;
+    const h = Math.floor(m / 60), r = m % 60;
+    return r ? `${h} ч ${r} мин` : `${h} ч`;
+  }
+  function lastPlayedText(ts) {
+    if (!ts) return 'ещё не запускали';
+    const d = new Date(ts), now = new Date();
+    const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+    const hm = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    if (days <= 0) return `сегодня, ${hm}`;
+    if (days === 1) return `вчера, ${hm}`;
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+  }
   function metaText(inst) {
     if (!inst) return '';
     const ram = inst.ramAuto ? `авто, ${gb(inst.ramEffective)} ГБ` : `${gb(inst.ram)} ГБ`;
-    return `Minecraft ${esc(inst.mc)} · ${esc(LD[inst.loader] || inst.loader)}${inst.loaderVersion ? ' ' + esc(inst.loaderVersion) : ''} · ОЗУ: ${ram} · модов: ${inst.modCount != null ? inst.modCount : (inst.mods || []).length}`;
+    const chip = (t, c) => `<span class="meta-chip${c ? ' ' + c : ''}">${t}</span>`;
+    return chip(`Minecraft ${esc(inst.mc)}`)
+      + chip(`${esc(LD[inst.loader] || inst.loader)}${inst.loaderVersion ? ' ' + esc(inst.loaderVersion) : ''}`)
+      + chip(`ОЗУ: ${ram}`)
+      + chip(`модов: ${inst.modCount != null ? inst.modCount : (inst.mods || []).length}`)
+      + (inst.playMs ? chip(`наиграно: ${playTime(inst.playMs)}`) : '');
   }
   function updateMeta() { const m = $id('lcMeta'); if (m) m.innerHTML = metaText(cur()); }
 
   function stageHtml() {
     const inst = cur();
-    const acc = selectedAcc();
-    const gate = inst ? '' : `<div class="lc-gate"><div class="lc-gate-card"><b>Установок пока нет</b>
-        <p>Выберите версию Minecraft и загрузчик модов, остальное лаунчер скачает сам.</p>
-        <div class="lc-gate-actions"><button class="btn primary" data-act="new" type="button">Скачать версию Minecraft</button></div></div></div>`;
-
     return `
       <section class="lc-stage" id="lcStage">
         <div class="lc-bg empty" id="lcBg"><div class="lc-slide"></div><div class="lc-slide"></div></div>
         <div class="lc-shade"></div>
+        <div class="lc-fx" aria-hidden="true"><canvas></canvas></div>
         <header class="lc-top">
-          <div class="lc-title"><span class="hero-eyebrow">${inst ? 'Экземпляр' : 'MatrixL'}</span>
-            <div class="lc-name">${esc(inst ? inst.name : 'MatrixL')}</div><p id="lcMeta">${metaText(inst)}</p></div>
           <div class="lc-top-right">
-            <button class="lc-chip" data-act="accounts" type="button" title="Аккаунты Minecraft">
-              ${avatar(acc, 'sm')}
-              <span class="lc-chip-t"><b>${esc(acc ? acc.name : 'Войти в аккаунт')}</b><small>${acc ? esc(TYPES[acc.type] || acc.type) : 'Ely.by, Microsoft или оффлайн'}</small></span>
-            </button>
             <button class="lc-chip lc-chip-icon" data-act="log" type="button" title="Журнал">Журнал</button>
           </div>
         </header>
-        ${gate}
+        <div class="stage-copy">
+          <span class="edition-label">Minecraft Java Edition</span>
+          <h1 class="lc-name">${esc(inst ? inst.name : 'MatrixL')}</h1>
+          <div class="lc-meta" id="lcMeta">${metaText(inst)}</div>
+          ${inst ? '' : `<p class="stage-intro">Выберите версию Minecraft и загрузчик модов, остальное лаунчер скачает сам.</p>
+          <button class="btn primary stage-create" data-act="new" type="button">Скачать версию Minecraft</button>`}
+        </div>
         <footer class="lc-bar">
           <div class="lc-bar-left">
             <div class="inst-strip" role="listbox" aria-label="Экземпляры">${S.instances.map(i =>
@@ -532,6 +572,7 @@
       <div class="ram-box" id="${p}Box" data-rec="${rec}">
         <div class="ram-sys"><b>Ваш компьютер:</b> ${esc(sys.cpu)}, потоков: ${sys.threads}<br>
           ОЗУ: ${gb(sys.totalMb)} ГБ всего, <span id="${p}Free">${gb(sys.freeMb)}</span> ГБ свободно сейчас · для игры доступно до ${gb(max)} ГБ</div>
+        ${S.sys && sys.totalMb > 0 ? `<div class="memory-chart" aria-hidden="true"><span>Свободная память</span><i><b id="${p}FreeBar"></b></i><span>Память для игры:</span><i><b id="${p}GameBar"></b></i></div>` : ''}
         <label class="ram-auto"><input type="checkbox" id="${p}Auto" ${auto ? 'checked' : ''}>
           Подбирать память автоматически <span class="muted">(рекомендуется <b id="${p}Rec">${gb(rec)}</b> ГБ)</span></label>
         <div class="ram-row">
@@ -549,6 +590,12 @@
     if (p === 'lcI') { const live = S.instances.find(x => x.id === (S.dlg && S.dlg.arg)); if (live) { rec = live.ramRecommended; box.dataset.rec = rec; } }
     range.disabled = auto;
     const shown = auto ? rec : parseInt(range.value, 10);
+    const fillMemoryBar = (suffix, mb) => {
+      const bar = $id(p + suffix);
+      if (bar) bar.style.width = Math.max(0, Math.min(100, 100 * mb / sys.totalMb)) + '%';
+    };
+    fillMemoryBar('FreeBar', sys.freeMb);
+    fillMemoryBar('GameBar', shown);
     $id(p + 'Rec').textContent = gb(rec);
     $id(p + 'Free').textContent = gb(sys.freeMb);
     $id(p + 'Val').textContent = (auto ? 'Авто · ' : '') + gb(shown) + ' ГБ';
@@ -1039,6 +1086,11 @@
         <div class="spec"><span>Minecraft</span><b>${esc(i.mc)}</b></div>
         <div class="spec"><span>Загрузчик</span><b>${esc(LD[i.loader] || i.loader)}${i.loaderVersion ? ' ' + esc(i.loaderVersion) : ''}</b></div>
         <div class="spec"><span>Модов</span><b id="lcInstModCount">${i.modCount}</b></div>
+      </div>
+      <div class="specs play-stats">
+        <div class="spec"><span>Наиграно</span><b>${i.playMs ? playTime(i.playMs) : '0 мин'}</b></div>
+        <div class="spec"><span>Запусков</span><b>${i.sessions || 0}</b></div>
+        <div class="spec"><span>Последний запуск</span><b>${lastPlayedText(i.lastPlayed)}</b></div>
       </div>
       ${ramControl('lcI', { auto: !!i.ramAuto, ram: i.ram, rec: i.ramRecommended })}`;
 
@@ -1546,7 +1598,7 @@
     const id = b.dataset.id, act = b.dataset.act;
     try {
       if (act === 'dclose') $id('lcDlg').close();
-      else if (act === 'log-copy') note(await copyLog() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
+      else if (act === 'log-copy') note(!S.logs.length ? 'Нечего копировать' : await copyLog() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
       else if (act === 'crash-copy') note(await copyCrash() ? 'Лог скопирован' : 'Не удалось скопировать, выделите текст вручную');
       else if (act === 'crash-reveal') await call('crash:reveal');
       else if (act === 'crash-ai') { if (await copyCrash()) note('Лог скопирован'); return; }   // ссылка откроется сама
@@ -1785,6 +1837,141 @@
     }
     finally { btn.disabled = false; const s2 = $id('lcManySel'); if (s2) s2.disabled = false; const c = $id('lcManyCancel'); if (c) c.hidden = true; }
   }
+
+  /* ---------------- «Скачать всё» из избранного: новый экземпляр или ZIP ---------------- */
+  const BATCH_KIND = { mod: 1, resourcepack: 1, shader: 1 };
+  const canBatch = m => (m.source === 'modrinth' || m.source === 'curseforge') && BATCH_KIND[m.kind] && !!(m.source === 'curseforge' ? cfIdOf(m) : m.slug);
+  const batchItem = m => ({ kind: m.kind, source: m.source, slug: refOf(m).slug, title: m.title });
+  const BATCH_LOADERS = ['fabric', 'quilt', 'forge', 'neoforge'];
+
+  async function downloadAll(items, title) {
+    if (!desktop) return;
+    const ok = items.filter(canBatch), skip = items.filter(m => !canBatch(m));
+    if (!ok.length) { note('Здесь нечего скачивать: поддерживаются моды, ресурспаки и шейдеры'); return; }
+    try { if (!S.versions) S.versions = await call('ver:list'); } catch (e) { note(e.message); return; }
+    const releases = S.versions.releases || [];
+    const cnt = { mod: 0, resourcepack: 0, shader: 0 };
+    ok.forEach(m => { cnt[m.kind]++; });
+    // версия игры, под которую подходит больше всего карточек (при равенстве берём более новую)
+    const fitCount = v => ok.filter(m => !(m.versions && m.versions.length) || m.versions.includes(v)).length;
+    let best = releases[0] || '', bestN = -1;
+    for (const v of releases) { const n = fitCount(v); if (n > bestN) { best = v; bestN = n; } }
+    // загрузчик: самый частый среди карточек, иначе Fabric (а если модов нет, то без загрузчика)
+    const lc = {}; ok.forEach(m => (m.loaders || []).forEach(l => { if (BATCH_LOADERS.includes(l)) lc[l] = (lc[l] || 0) + 1; }));
+    const topLoader = Object.keys(lc).sort((a, b) => lc[b] - lc[a])[0];
+    const defLoader = cnt.mod ? (topLoader || 'fabric') : 'vanilla';
+    const ldList = cnt.mod ? BATCH_LOADERS : ['vanilla', ...BATCH_LOADERS];
+
+    const parts = [cnt.mod ? `модов: ${cnt.mod}` : '', cnt.resourcepack ? `ресурспаков: ${cnt.resourcepack}` : '', cnt.shader ? `шейдеров: ${cnt.shader}` : ''].filter(Boolean).join(', ');
+    const d = document.createElement('dialog');
+    d.className = 'ui-confirm dla'; d.setAttribute('aria-labelledby', 'dlaT');
+    d.innerHTML = `<div class="dla-body">
+        <h3 id="dlaT">Скачать всё</h3>
+        <p class="dla-sub">${esc(title)}: ${esc(parts)}</p>
+        <div class="dla-modes" role="radiogroup" aria-label="Куда скачать">
+          <label class="dla-mode"><input type="radio" name="dlaMode" value="inst" checked>
+            <span><b>Новый экземпляр</b><small>Лаунчер создаст экземпляр Minecraft и разложит файлы: моды в mods, ресурспаки в resourcepacks, шейдеры в shaderpacks. Можно сразу играть.</small></span></label>
+          <label class="dla-mode"><input type="radio" name="dlaMode" value="zip">
+            <span><b>ZIP-архив</b><small>Один архив с папками mods, resourcepacks и shaderpacks, без лишнего. В лаунчер ничего не устанавливается.</small></span></label>
+        </div>
+        <label class="field"><span id="dlaNameL">Название экземпляра</span><input id="dlaName" type="text" maxlength="40" value="${esc(title)}"></label>
+        <div class="dla-row">
+          <label class="field"><span>Версия Minecraft</span><select id="dlaMc">${releases.map((v, i) => { const n = fitCount(v); return `<option value="${esc(v)}" ${v === best ? 'selected' : ''}>${esc(v)}${n ? ` · ${n}/${ok.length}` : ''}</option>`; }).join('')}</select></label>
+          <label class="field"><span>Загрузчик</span><select id="dlaLd">${ldList.map(k => `<option value="${k}" ${k === defLoader ? 'selected' : ''}>${esc(k === 'vanilla' ? 'Без модов (Vanilla)' : LD_FULL[k])}</option>`).join('')}</select></label>
+        </div>
+        <p class="filter-note" id="dlaFit"></p>
+        ${cnt.mod ? '<p class="filter-note">К модам добавятся обязательные зависимости. Версия каждого файла подбирается под выбранную игру и загрузчик, для чего-то подходящего может не найтись.</p>' : ''}
+        ${skip.length ? `<p class="filter-note">Не войдут (${skip.length}): ${esc(skip.slice(0, 6).map(m => m.title).join(', '))}${skip.length > 6 ? '…' : ''}. Плагины и готовые сборки так не скачиваются, их ставят из своей карточки.</p>` : ''}
+      </div>
+      <div class="uc-foot"><button type="button" class="btn" data-v="0">Отмена</button><button type="button" class="btn primary" data-v="1" id="dlaGo">Создать экземпляр и скачать</button></div>`;
+    document.body.appendChild(d);
+    const q = id => d.querySelector('#' + id);
+    const modeNow = () => d.querySelector('input[name="dlaMode"]:checked').value;
+    const sync = () => {
+      const zip = modeNow() === 'zip';
+      q('dlaNameL').textContent = zip ? 'Имя архива' : 'Название экземпляра';
+      q('dlaGo').textContent = zip ? 'Выбрать место и скачать' : 'Создать экземпляр и скачать';
+      const mc = q('dlaMc').value, n = fitCount(mc);
+      q('dlaFit').textContent = `Совместимо с Minecraft ${mc}: ${n}/${ok.length} (по данным карточек).`;
+    };
+    d.addEventListener('change', sync); sync();
+    let closed = false;
+    const close = () => { if (closed) return; closed = true; d.classList.add('closing'); setTimeout(() => { try { d.close(); } catch (e) { /* уже закрыт */ } d.remove(); }, 140); };
+    d.addEventListener('cancel', e => { e.preventDefault(); close(); });
+    d.addEventListener('click', e => {
+      if (e.target === d) return close();
+      const b = e.target.closest('button[data-v]'); if (!b) return;
+      if (b.dataset.v === '0') return close();
+      const go = {
+        mode: modeNow(), name: q('dlaName').value.trim() || title, mc: q('dlaMc').value, loader: q('dlaLd').value
+      };
+      if (!go.mc) { note('Выберите версию Minecraft'); return; }
+      if (cnt.mod && go.loader === 'vanilla') { note('Для модов выберите загрузчик'); return; }
+      close();
+      runDownloadAll(ok.map(batchItem), go);
+    });
+    d.showModal();
+    q('dlaName').focus(); q('dlaName').select();
+  }
+
+  async function batchSummary(verb, res) {
+    const good = res.filter(r => r.ok), bad = res.filter(r => !r.ok);
+    if (!bad.length) { note(`${verb}: все файлы (${good.length})`); return; }
+    note(`${verb}: ${good.length} из ${res.length}, не получилось: ${bad.length}`);
+    const lines = bad.slice(0, 12).map(r => `• ${r.title}: ${String(r.error || 'ошибка').slice(0, 140)}`);
+    if (bad.length > 12) lines.push(`…и ещё ${bad.length - 12}`);
+    await ask({ title: `${verb}: ${good.length} из ${res.length}`, text: `Не получилось (${bad.length}):\n${lines.join('\n')}`, ok: 'Понятно', cancel: 'Закрыть' });
+  }
+
+  async function runDownloadAll(items, go) {
+    const LDN = LD[go.loader] || go.loader;
+    if (go.mode === 'zip') {
+      taskStart('task:mod', `Избранное в ZIP: ${items.length}`, `Minecraft ${go.mc} · ${LDN}`, { cancelTitle: 'Отменить скачивание?', cancelText: 'Недоделанный архив будет удалён.', cancelKeep: 'Продолжить скачивание' });
+      try {
+        const r = await call('dlall:zip', { items, mc: go.mc, loader: go.loader, name: go.name });
+        if (!r) { const e = DL.get('task:mod'); if (e) { clearTimeout(e.t); DL.delete('task:mod'); dlPaint(); } return; }   // место для архива не выбрали
+        const mb = (r.size / 1048576).toFixed(1).replace('.', ',');
+        taskEnd('task:mod', true, `Готово: файлов ${r.files}, ${mb} МБ`);
+        await batchSummary('Архив готов', r.results);
+      } catch (err) {
+        if (isCancel(err)) { taskCancelled('task:mod'); note('Скачивание отменено'); }
+        else { taskEnd('task:mod', false, err.message); note(err.message); }
+      }
+      return;
+    }
+    // новый экземпляр
+    if (S.creating || S.packBusy) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
+    S.creating = true;
+    let inst = null;
+    try {
+      let opts = {};
+      try { opts = await call('loader:options', go.mc); } catch (e) { /* не получили список, пусть решит создание */ }
+      if (go.loader !== 'vanilla' && opts && Object.keys(opts).length && !opts[go.loader]) throw new Error(`Для Minecraft ${go.mc} нет загрузчика ${LDN}. Выберите другую версию игры или загрузчик.`);
+      taskStart('task:create', `Minecraft ${go.mc}`, `«${go.name}» · ${LDN}`);
+      note(`Создаю экземпляр «${go.name}», потом скачаю файлы из избранного`);
+      inst = await call('inst:create', { name: go.name, mc: go.mc, loader: go.loader, loaderVersion: null, ramAuto: true });
+      taskEnd('task:create', true, 'Экземпляр создан');
+      S.sel = inst.id; saveSel(); S.shotsLoaded = false;
+      await reloadInstances(); if (onHome()) render();
+    } catch (err) {
+      if (isCancel(err)) { taskCancelled('task:create'); note('Создание экземпляра отменено'); }
+      else { if (DL.get('task:create')) taskEnd('task:create', false, err.message); note(err.message); }
+      S.creating = false; return;
+    }
+    S.creating = false;
+    taskStart('task:mod', `Избранное: ${items.length}`, `«${inst.name}»`, { cancelTitle: 'Отменить скачивание?', cancelText: 'Экземпляр останется, уже скачанные файлы тоже.', cancelKeep: 'Продолжить скачивание' });
+    try {
+      const res = await call('dlall:instance', { instanceId: inst.id, items });
+      taskEnd('task:mod', true, 'Готово');
+      await reloadInstances(); if (onHome()) { render(); }
+      await batchSummary(`Экземпляр «${inst.name}» готов`, res);
+    } catch (err) {
+      if (isCancel(err)) { taskCancelled('task:mod'); note(`Экземпляр «${inst.name}» создан, но файлы скачались не все`); }
+      else { taskEnd('task:mod', false, err.message); note(err.message); }
+      await reloadInstances(); if (onHome()) render();
+    }
+  }
+
   async function installMany(items, title) {
     if (!desktop) return;
     await reloadInstances();
@@ -2102,7 +2289,7 @@
     const i = cur();
     mm.invoke('discord:page', { gv: (typeof catalog !== 'undefined' && catalog && catalog.kind === (page || state.page)) ? catalog.gv : '', page: page || state.page, lang: window.I18N ? window.I18N.lang() : 'ru', inst: i ? { name: i.name, mc: i.mc, loader: i.loader, mods: i.modCount } : null, favs: typeof favorites !== 'undefined' ? favorites.size : 0, item: viewing ? { title: viewing.title, kind: viewing.kind, author: viewing.author } : null }).catch(() => {});
   }
-  window.LauncherUI = { presence, setViewing, _task: { taskStart, taskProgress, taskEnd }, render, decorateModal, downloadChoice, isDesktop: desktop, installPackFile, installMany };
+  window.LauncherUI = { presence, setViewing, _task: { taskStart, taskProgress, taskEnd }, render, decorateModal, downloadChoice, isDesktop: desktop, installPackFile, installMany, downloadAll };
 
   let started = false;
   async function init() {

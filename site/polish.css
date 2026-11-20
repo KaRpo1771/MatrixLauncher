@@ -1,0 +1,161 @@
+/* ============================================================
+   MatrixL 1.3.5: редизайн, часть 2 («официальный» вид).
+   Отдельный слой поверх style.css, edition.css и redesign.css.
+   Логику лаунчера не трогает. Цвета берутся из переменных темы
+   (--accent, --accent-2, --surface, --line…), поэтому все
+   акценты переключаются как раньше. Движение отключается
+   системной настройкой «уменьшить движение».
+   ============================================================ */
+
+:root{
+  --pl-i-cube:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2.5 3.5 7.2v9.6l8.5 4.7 8.5-4.7V7.2z'/%3E%3Cpath d='M3.5 7.2 12 12l8.5-4.8M12 12v9.5'/%3E%3C/svg%3E");
+  --pl-i-loader:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8h13.5a3 3 0 0 1-3 3.2H13V14h2.6v3.2H8.4V14H11v-2.8H8.6A4.6 4.6 0 0 1 4 8z'/%3E%3C/svg%3E");
+  --pl-i-ram:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='1.6'/%3E%3Cpath d='M9.5 2.5v4M14.5 2.5v4M9.5 17.5v4M14.5 17.5v4M2.5 9.5h4M2.5 14.5h4M17.5 9.5h4M17.5 14.5h4'/%3E%3C/svg%3E");
+  --pl-i-mods:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 4 7.4l8 4.4 8-4.4z'/%3E%3Cpath d='m4 12 8 4.4 8-4.4M4 16.6 12 21l8-4.4'/%3E%3C/svg%3E");
+  --pl-i-clock:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.6'/%3E%3Cpath d='M12 7.2V12l3.2 2'/%3E%3C/svg%3E");
+  --pl-i-user:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8.4' r='3.7'/%3E%3Cpath d='M4.6 20c.9-4 3.8-6 7.4-6s6.5 2 7.4 6'/%3E%3C/svg%3E");
+}
+:root{--pl-grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%' height='100%' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+:root{
+  --pl-ease:cubic-bezier(.2,.8,.2,1);
+  --pl-glass:color-mix(in srgb,var(--bg-0) 78%,transparent);
+  --pl-hair:color-mix(in srgb,var(--accent) 24%,var(--line));
+}
+
+/* ---------- общая атмосфера ---------- */
+.pl-grain{position:fixed;inset:0;z-index:60;pointer-events:none;background:var(--pl-grain);opacity:.04}
+::selection{background:color-mix(in srgb,var(--accent) 50%,transparent);color:#fff}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* плавающие квадраты на заднем плане: контуром вместо сплошных плашек */
+.bg-squares{opacity:.9}
+.bg-squares .sq{
+  fill:var(--accent);fill-opacity:.05;
+  stroke:var(--accent);stroke-opacity:.42;stroke-width:1.4;vector-effect:non-scaling-stroke;
+  opacity:.55!important;
+}
+
+/* ---------- заголовок окна и верхнее меню ---------- */
+.titlebar{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 7%,var(--bg-0)),var(--bg-0));box-shadow:inset 0 -1px 0 color-mix(in srgb,var(--accent) 14%,transparent)}
+.tb-title{letter-spacing:.08em}
+.tb-ver{
+  opacity:1;margin-left:2px;padding:1px 8px;border-radius:99px;font-size:10px;letter-spacing:.04em;
+  color:color-mix(in srgb,var(--accent) 85%,#fff);
+  border:1px solid color-mix(in srgb,var(--accent) 38%,transparent);
+  background:color-mix(in srgb,var(--accent) 9%,transparent);
+}
+.topbar{
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 5%,var(--bg-0)),color-mix(in srgb,var(--bg-0) 92%,transparent));
+  backdrop-filter:blur(16px) saturate(1.2);transition:box-shadow .3s;
+}
+.topbar.is-scrolled{box-shadow:0 14px 30px -18px #000}
+.topbar .nav-item{border-radius:11px;transition:background .25s,color .2s,border-color .25s,transform .25s var(--pl-ease)}
+.topbar .nav-item:hover:not(.active){background:color-mix(in srgb,var(--accent) 7%,transparent)}
+.topbar .nav-item.active{
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 15%,transparent),color-mix(in srgb,var(--accent) 4%,transparent))!important;
+  border-color:color-mix(in srgb,var(--accent) 38%,transparent)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07)!important;
+}
+/* кнопка входа: плоская, в тон кнопки «Играть» */
+.topbar .account .side-btn.primary{
+  border-radius:13px!important;padding:10px 20px;
+  background:var(--accent)!important;color:var(--accent-ink)!important;
+  border:1px solid var(--accent-2)!important;box-shadow:none;
+}
+
+/* ---------- главная: сцена ---------- */
+/* значок издания: кубик вместо цветного квадрата */
+.lc-stage .edition-label{gap:9px}
+.lc-stage .edition-label::before{
+  width:15px;height:15px;border-radius:0;box-shadow:none;animation:none;
+  background:var(--accent);filter:drop-shadow(0 0 6px color-mix(in srgb,var(--accent) 70%,transparent));
+  -webkit-mask:var(--pl-i-cube) center/contain no-repeat;mask:var(--pl-i-cube) center/contain no-repeat;
+}
+/* чипы получили иконки (порядок: версия, загрузчик, ОЗУ, моды, время) */
+.lc-stage .meta-chip{display:inline-flex;align-items:center;gap:8px;border-color:color-mix(in srgb,var(--accent) 22%,rgba(255,255,255,.1))}
+.lc-stage .meta-chip::before{
+  content:"";width:14px;height:14px;flex:none;background:var(--accent);opacity:.95;
+  -webkit-mask:var(--pl-i-cube) center/contain no-repeat;mask:var(--pl-i-cube) center/contain no-repeat;
+}
+.lc-stage .meta-chip:nth-child(2)::before{-webkit-mask-image:var(--pl-i-loader);mask-image:var(--pl-i-loader)}
+.lc-stage .meta-chip:nth-child(3)::before{-webkit-mask-image:var(--pl-i-ram);mask-image:var(--pl-i-ram)}
+.lc-stage .meta-chip:nth-child(4)::before{-webkit-mask-image:var(--pl-i-mods);mask-image:var(--pl-i-mods)}
+.lc-stage .meta-chip:nth-child(5)::before{-webkit-mask-image:var(--pl-i-clock);mask-image:var(--pl-i-clock)}
+
+/* виньетка и лучи света из правого верхнего угла (там луна на фирменной картинке) */
+.lc-stage .lc-shade::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 170px rgba(0,0,0,.5)}
+.lc-fx::before{
+  content:"";position:absolute;inset:0;pointer-events:none;transform-origin:82% 6%;
+  background:conic-gradient(from 188deg at 82% 6%,
+    transparent 0deg,color-mix(in srgb,var(--accent) 26%,transparent) 7deg,transparent 15deg,
+    transparent 22deg,color-mix(in srgb,var(--accent) 20%,transparent) 29deg,transparent 38deg,
+    transparent 46deg,color-mix(in srgb,var(--accent) 24%,transparent) 54deg,transparent 64deg,
+    transparent 72deg,color-mix(in srgb,var(--accent) 16%,transparent) 79deg,transparent 88deg,transparent 360deg);
+  -webkit-mask-image:radial-gradient(95% 105% at 82% 6%,#000 8%,transparent 76%);mask-image:radial-gradient(95% 105% at 82% 6%,#000 8%,transparent 76%);
+  opacity:.9;
+}
+
+/* нижняя панель: светящийся «шов» по верхней кромке */
+.lc-stage .lc-bar::before{
+  content:"";position:absolute;left:50%;top:-1px;width:min(34%,300px);height:1px;translate:-50% 0;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.9;
+}
+
+/* кнопка «Играть»: спокойный плоский вид; при запуске по ней бегут полосы, когда игра идёт, вместо стрелки точка */
+.content .lc-stage .lc-play.btn.primary{min-width:190px;padding:14px 32px;font-size:16px;letter-spacing:.12em}
+.lc-stage.is-starting .lc-play.btn.primary{
+  opacity:1!important;cursor:progress;
+  background-image:repeating-linear-gradient(135deg,rgba(255,255,255,.2) 0 10px,transparent 10px 20px)!important;
+  background-size:28.2843px 28.2843px!important;
+}
+.lc-stage.is-running .lc-play.btn.primary{opacity:1!important;filter:saturate(.7) brightness(.92)}
+.lc-stage.is-running .lc-play.btn.primary::before{width:9px;height:9px;border:0;border-radius:50%;background:currentColor}
+
+/* название и чипы стоят на месте: без смещения за курсором текст остаётся чётким */
+.lc-stage .stage-copy{transform:none!important;transition:none!important}
+
+/* ---------- карточки и страницы ---------- */
+.content :is(.panel,.card,.quick-card,.news-card,.setting-card,.srv-card){
+  background-image:linear-gradient(180deg,rgba(255,255,255,.03),transparent 46%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
+}
+.section-cover{background-image:radial-gradient(60% 120% at 100% 0%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 70%)}
+.section-cover::before{border-radius:inherit}
+.section-emblem{border-radius:22px}
+
+/* ---------- окна и уведомления ---------- */
+dialog{
+  border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line-hard))!important;border-radius:16px!important;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,var(--surface)),var(--surface))!important;
+  box-shadow:0 40px 90px -30px #000,inset 0 1px 0 rgba(255,255,255,.06)!important;
+}
+dialog::backdrop{background:rgba(4,6,8,.68)!important;backdrop-filter:blur(5px)!important}
+.toast{
+  border-radius:12px;border:1px solid color-mix(in srgb,var(--accent) 36%,var(--line));border-left:3px solid var(--accent);
+  background:color-mix(in srgb,var(--surface) 90%,transparent);backdrop-filter:blur(14px);
+  box-shadow:0 20px 44px -18px #000;
+}
+
+/* ---------- анимации (только если движение разрешено) ---------- */
+@media (prefers-reduced-motion:no-preference){
+    .lc-stage.is-starting .lc-play.btn.primary{animation:pl-stripes .7s linear infinite}
+  .lc-stage.is-running .lc-play.btn.primary::before{animation:pl-live 1.6s ease-in-out infinite}
+  .lc-fx::before{animation:pl-rays 26s ease-in-out infinite alternate}
+  .toast:not([hidden]){animation:pl-toast .35s var(--pl-ease)}
+  .lc-stage .lc-bar::before{animation:pl-seam 6s ease-in-out infinite}
+}
+@keyframes pl-stripes{to{background-position:28.2843px 0}}
+@keyframes pl-live{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.55}}
+@keyframes pl-rays{from{rotate:-3deg;opacity:.6}to{rotate:3deg;opacity:1}}
+@keyframes pl-toast{from{opacity:0;transform:translate(-50%,14px)}}
+@keyframes pl-seam{0%,100%{width:min(26%,220px);opacity:.6}50%{width:min(42%,380px);opacity:1}}
+@media (prefers-reduced-motion:reduce){.lc-fx::before,.pl-grain{display:none}}
+@media (max-width:1240px){
+  .topbar .account .side-btn.primary{padding:9px 14px}
+  .topbar .nav{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 30px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 30px),transparent)}
+}
+@media (max-width:700px){.lc-fx::before{opacity:.5}.lc-stage .meta-chip::before{width:12px;height:12px}}
+
+/* ---------- интро: виньетка (пока оно непрозрачное) ---------- */
+.intro-on .intro:not(.intro-clear)::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 240px rgba(0,0,0,.65)}

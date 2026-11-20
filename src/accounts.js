@@ -61,7 +61,7 @@ function setSettings(patch) {
   if (patch && 'discordEnabled' in patch) cur.discordEnabled = !!patch.discordEnabled;
   if (patch && 'discordHideServer' in patch) cur.discordHideServer = !!patch.discordHideServer;
   if (patch && patch.discordOpts && typeof patch.discordOpts === 'object') {   // расширенные настройки статуса: только известные булевы ключи
-    const keys = ['showHost', 'showPlayers', 'showWorld', 'showBiome', 'showPlace', 'showWeather', 'showHealth', 'showEvents', 'showAfk', 'showCoords', 'showTimer', 'showLauncher'];
+    const keys = ['showHost', 'showServerIcon', 'showPlayers', 'showWorld', 'showBiome', 'showPlace', 'showWeather', 'showHealth', 'showEvents', 'showAfk', 'showCoords', 'showTimer', 'showLauncher'];
     const o = { ...(cur.discordOpts || {}) };
     for (const k of keys) if (k in patch.discordOpts) o[k] = !!patch.discordOpts[k];
     // старая настройка заменена новым ключом showHost
