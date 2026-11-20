@@ -83,18 +83,8 @@
 .lc-stage .meta-chip:nth-child(4)::before{-webkit-mask-image:var(--pl-i-mods);mask-image:var(--pl-i-mods)}
 .lc-stage .meta-chip:nth-child(5)::before{-webkit-mask-image:var(--pl-i-clock);mask-image:var(--pl-i-clock)}
 
-/* виньетка и лучи света из правого верхнего угла (там луна на фирменной картинке) */
+/* виньетка */
 .lc-stage .lc-shade::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 170px rgba(0,0,0,.5)}
-.lc-fx::before{
-  content:"";position:absolute;inset:0;pointer-events:none;transform-origin:82% 6%;
-  background:conic-gradient(from 188deg at 82% 6%,
-    transparent 0deg,color-mix(in srgb,var(--accent) 26%,transparent) 7deg,transparent 15deg,
-    transparent 22deg,color-mix(in srgb,var(--accent) 20%,transparent) 29deg,transparent 38deg,
-    transparent 46deg,color-mix(in srgb,var(--accent) 24%,transparent) 54deg,transparent 64deg,
-    transparent 72deg,color-mix(in srgb,var(--accent) 16%,transparent) 79deg,transparent 88deg,transparent 360deg);
-  -webkit-mask-image:radial-gradient(95% 105% at 82% 6%,#000 8%,transparent 76%);mask-image:radial-gradient(95% 105% at 82% 6%,#000 8%,transparent 76%);
-  opacity:.9;
-}
 
 /* нижняя панель: светящийся «шов» по верхней кромке */
 .lc-stage .lc-bar::before{
@@ -141,21 +131,19 @@ dialog::backdrop{background:rgba(4,6,8,.68)!important;backdrop-filter:blur(5px)!
 @media (prefers-reduced-motion:no-preference){
     .lc-stage.is-starting .lc-play.btn.primary{animation:pl-stripes .7s linear infinite}
   .lc-stage.is-running .lc-play.btn.primary::before{animation:pl-live 1.6s ease-in-out infinite}
-  .lc-fx::before{animation:pl-rays 26s ease-in-out infinite alternate}
   .toast:not([hidden]){animation:pl-toast .35s var(--pl-ease)}
   .lc-stage .lc-bar::before{animation:pl-seam 6s ease-in-out infinite}
 }
 @keyframes pl-stripes{to{background-position:28.2843px 0}}
 @keyframes pl-live{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.55}}
-@keyframes pl-rays{from{rotate:-3deg;opacity:.6}to{rotate:3deg;opacity:1}}
 @keyframes pl-toast{from{opacity:0;transform:translate(-50%,14px)}}
 @keyframes pl-seam{0%,100%{width:min(26%,220px);opacity:.6}50%{width:min(42%,380px);opacity:1}}
-@media (prefers-reduced-motion:reduce){.lc-fx::before,.pl-grain{display:none}}
+@media (prefers-reduced-motion:reduce){.pl-grain{display:none}}
 @media (max-width:1240px){
   .topbar .account .side-btn.primary{padding:9px 14px}
   .topbar .nav{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 30px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 30px),transparent)}
 }
-@media (max-width:700px){.lc-fx::before{opacity:.5}.lc-stage .meta-chip::before{width:12px;height:12px}}
+@media (max-width:700px){.lc-stage .meta-chip::before{width:12px;height:12px}}
 
 /* ---------- интро: виньетка (пока оно непрозрачное) ---------- */
 .intro-on .intro:not(.intro-clear)::after{content:"";position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 240px rgba(0,0,0,.65)}
