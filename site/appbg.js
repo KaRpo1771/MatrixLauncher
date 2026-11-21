@@ -21,11 +21,20 @@
     box.style.setProperty('--bg-dim', String(S.view.dim / 100));
     box.style.setProperty('--bg-blur', S.view.blur + 'px');
   }
+  // старый фон нужно именно освободить: убранный из страницы <video> без этого продолжает декодироваться
+  // и держать память, из-за чего после нескольких смен фона лаунчер начинает лагать
+  function releaseMedia(box) {
+    if (S.unlock) { S.unlock(); S.unlock = null; }
+    box.querySelectorAll('video, img').forEach(m => {
+      try { if (m.pause) m.pause(); m.removeAttribute('src'); if (m.load) m.load(); } catch (e) { /* уже освобождён */ }
+    });
+    box.textContent = '';
+  }
   function applyBg() {
     const box = $('appBg');
     if (!box) return;
     const bg = S.view && S.view.bg;
-    box.textContent = '';
+    releaseMedia(box);
     S.video = null;
     document.documentElement.classList.toggle('has-bg', !!bg);
     if (bg) {
@@ -61,7 +70,7 @@
     if (bar) bar.disabled = true;
     if (clr) clr.disabled = true;
     if (prev) prev.innerHTML = '<span class="bg-prev-name">Готовлю видео для фона…</span><span class="bg-prev-kind">Это займёт до пары минут</span>';
-    say('Видео в формате, который не проигрывается напрямую. Конвертирую в MP4 (H.264), это займёт до пары минут');
+    say('Неподдерживаемый формат. Конвертация…');
     try {
       const r = await call('appmedia:convertBg');
       if (S.view && S.view.bg && S.view.bg.url !== url) return;   // за это время фон уже сменили
@@ -89,7 +98,10 @@
     v.play().catch(() => {
       v.muted = true;
       v.play().catch(() => { /* останется первый кадр */ });
-      const go = () => { removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true); if (S.video === v) { videoVolume(); v.play().catch(() => {}); } };
+      if (S.unlock) S.unlock();
+      const off = () => { removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true); if (S.unlock === off) S.unlock = null; };
+      const go = () => { off(); if (S.video === v) { videoVolume(); v.play().catch(() => {}); } };
+      S.unlock = off;
       addEventListener('pointerdown', go, true); addEventListener('keydown', go, true);
     });
   }

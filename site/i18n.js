@@ -136,7 +136,7 @@
     "Стандартный фон": "Default background", "PNG, JPG, WEBP, GIF до 40 МБ, MP4 и WEBM до 250 МБ.": "PNG, JPG, WEBP, GIF up to 40 MB, MP4 and WEBM up to 250 MB.",
     "Скрыть версии": "Hide versions", "Снять фильтр по версии": "Clear version filter", "Фильтр по версии снят": "Version filter cleared",
     "Готовлю видео для фона…": "Preparing the background video…", "Это займёт до пары минут": "This takes up to a couple of minutes", "Фон готов": "Background ready",
-    "Видео в формате, который не проигрывается напрямую. Конвертирую в MP4 (H.264), это займёт до пары минут": "This video format cannot be played directly. Converting to MP4 (H.264), it takes up to a couple of minutes",
+    "Неподдерживаемый формат. Конвертация…": "Unsupported format. Converting…",
     "Не удалось показать фон. Подойдут PNG, JPG, WEBP, GIF, а для видео MP4 или WEBM": "Could not show the background. PNG, JPG, WEBP, GIF, and MP4 or WEBM for video work", "Внешний вид": "Appearance", "Каталог": "Catalog", "Лаунчер и игра": "Launcher and game", "Система": "System",
     "Не удалось показать фон: видеокодек не поддерживается этим компьютером. Подойдёт MP4 (H.264) или WEBM": "Could not show the background: this computer does not support the video codec. MP4 (H.264) or WEBM will work",
     "Стандартный фон: квадраты": "Default background: squares", "Видео": "Video", "Картинка": "Image",
