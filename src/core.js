@@ -1010,7 +1010,7 @@ function expandArgs(list, vars, features) {
 function buildCommand({ v, libs, jar, javaExe, inst, account, gameDir, nativesDir, assetsRoot, agent, ramMb }) {
   const classpath = [...libs.filter(l => l.cp).map(l => l.file), jar].join(CP_SEP);
   const vars = {
-    auth_player_name: account.name, version_name: v.id, game_directory: gameDir,
+    auth_player_name: account.name, version_name: v._jarId || v.id, game_directory: gameDir,
     assets_root: assetsRoot, assets_index_name: v.assetIndex.id, auth_uuid: account.uuid,
     auth_access_token: account.token || '0', clientid: '', auth_xuid: '',
     user_type: account.type === 'microsoft' ? 'msa' : account.type === 'ely' ? 'mojang' : 'legacy', version_type: v.type || 'release',
@@ -1516,10 +1516,36 @@ function parseToml(text) {
 }
 const rangeAny = r => r == null || r === '*' || r === '' || (Array.isArray(r) && r.some(x => x === '*'));
 
+/* Моды внутри моды (META-INF/jarjar у Forge/NeoForge, META-INF/jars у Fabric): «обёртки» вроде *-standalone.jar
+   сами не описывают мод, а несут его внутри. Без этого лаунчер не видел такой мод и ругался на «недостающую» зависимость. */
+function nestedInfo(AdmZip, zip, depth) {
+  const out = { ids: [], loaders: [] };
+  if (depth > 2) return out;
+  let entries = [];
+  try { entries = zip.getEntries(); } catch { return out; }
+  for (const e of entries) {
+    if (e.isDirectory || !/^META-INF\/(jarjar|jars)\/[^/]+\.jar$/i.test(e.entryName) || e.header.size > 64 * MB) continue;
+    try {
+      const z = new AdmZip(e.getData());
+      const t = n => { const x = z.getEntry(n); return x ? z.readAsText(x).replace(/^\uFEFF/, '') : null; };
+      let fab = null; try { fab = JSON.parse(t('fabric.mod.json') || 'null'); } catch { /* не JSON */ }
+      if (fab && fab.id) { out.ids.push(fab.id, ...(Array.isArray(fab.provides) ? fab.provides : [])); out.loaders.push('fabric'); }
+      for (const [n, ld] of [['META-INF/neoforge.mods.toml', 'neoforge'], ['META-INF/mods.toml', 'forge']]) {
+        const x = t(n); if (!x) continue;
+        const tm = parseToml(x);
+        if (tm.ids.length) { out.ids.push(...tm.ids); out.loaders.push(ld); }
+      }
+      const deeper = nestedInfo(AdmZip, z, depth + 1);
+      out.ids.push(...deeper.ids); out.loaders.push(...deeper.loaders);
+    } catch { /* вложенный архив не читается, пропускаем */ }
+  }
+  return out;
+}
+
 function readJar(file, st) {
   const key = file + '|' + st.size + '|' + st.mtimeMs;
   if (jarCache.has(key)) return jarCache.get(key);
-  const meta = { loaders: [], ids: [], title: '', version: '', depends: [], breaks: [], conflicts: [], nested: [] };
+  const meta = { loaders: [], ids: [], nestedIds: [], title: '', version: '', depends: [], breaks: [], conflicts: [], nested: [] };
   try {
     const AdmZip = require('adm-zip');
     const zip = new AdmZip(file);
@@ -1557,6 +1583,10 @@ function readJar(file, st) {
       const arr = Array.isArray(mc) ? mc : mc && Array.isArray(mc.modList) ? mc.modList : [];
       if (arr.length && arr[0].modid) { meta.loaders.push('forge'); meta.ids.push(...arr.map(x => x.modid).filter(Boolean)); meta.title = arr[0].name || arr[0].modid; meta.version = arr[0].version || ''; }
     }
+    const inner = nestedInfo(AdmZip, zip, 0);
+    if (inner.ids.length) meta.nestedIds = [...new Set(inner.ids)];
+    if (!meta.loaders.length && inner.loaders.length) meta.loaders = [...new Set(inner.loaders)];   // «обёртка»: загрузчик берём у вложенного мода
+    if (!meta.title && meta.nestedIds.length) meta.title = meta.nestedIds[0];
   } catch { meta.broken = true; }
   meta.ids = [...new Set(meta.ids)];
   if (jarCache.size > 3000) jarCache.clear();
@@ -1622,7 +1652,8 @@ async function checkMods(instanceId) {
   }
 
   // 4. не хватает обязательных модов
-  const provided = new Set(); files.forEach(f => f.ids.forEach(id => provided.add(id)));
+  const provided = new Set(); files.forEach(f => { f.ids.forEach(id => provided.add(id)); (f.nestedIds || []).forEach(id => provided.add(id)); });
+  const fileNorms = files.map(f => Compat.norm(String(f.file).replace(/\.jar$/i, '')));
   const nestedNorm = files.flatMap(f => f.nested.map(Compat.norm));
   const missing = new Map();
   for (const f of files) for (let d of f.depends) {
@@ -1630,11 +1661,12 @@ async function checkMods(instanceId) {
     if (SYSTEM_IDS.has(d) || provided.has(d)) continue;
     if (/^quilted_fabric_api|^qsl|^quilt_/.test(d) && (provided.has('quilted_fabric_api') || provided.has('qsl'))) continue;
     if (nestedNorm.some(n => n.includes(Compat.norm(d)))) continue;                 // вложенный jar внутри самого мода
+    { const dn = Compat.norm(d); if (dn.length >= 4 && fileNorms.some(n => n.includes(dn))) continue; }   // id совпадает с именем файла: мод на месте, даже если описание не прочиталось
     (missing.get(d) || missing.set(d, []).get(d)).push(f.file);
   }
   for (const [d, who] of missing) {
     const name = d === 'fabric-api' ? 'Fabric API' : d;
-    add({ level: 'warn', code: 'missing', title: `Не хватает «${name}»`,
+    add({ level: 'warn', code: 'missing', depId: d, title: `Не хватает «${name}»`,
       text: `Для работы ${who.length > 1 ? 'модов' : 'мода'} ${who.join(', ')} нужен «${name}», но его нет в папке. Установите его, иначе игра может не запуститься.`, mods: who });
   }
 
@@ -1663,7 +1695,29 @@ async function checkMods(instanceId) {
   if (unknown.length) add({ level: 'info', code: 'unknown', title: 'Не удалось определить загрузчик',
     text: `В этих файлах нет описания мода, проверить их нельзя: ${unknown.map(f => f.file).join(', ')}.`, mods: unknown.map(f => f.file) });
 
-  return { scanned: files.length, issues: Compat.sortIssues(issues), loader: inst.loader, mc: inst.mc };
+  // игнорируемые проблемы: пользователь отметил их кнопкой «Игнорировать», они больше не показываются
+  issues.forEach(i => { i.key = issueKey(i); });
+  const ign = new Set(inst.ignoredIssues || []);
+  const shown = issues.filter(i => !ign.has(i.key));
+  return { scanned: files.length, issues: Compat.sortIssues(shown), ignored: issues.length - shown.length, loader: inst.loader, mc: inst.mc };
+}
+
+/* Устойчивый ключ проблемы: не зависит от порядка и текста. Для «не хватает» это сама зависимость, для остальных тип + файлы. */
+function issueKey(i) {
+  if (i.depId) return 'missing|' + i.depId;
+  const mods = (i.mods || []).map(String).sort().join(',');
+  return (i.code || 'issue') + '|' + (mods || crypto.createHash('sha1').update(String(i.title) + String(i.text)).digest('hex').slice(0, 12));
+}
+/* on=true добавляет ключи в список игнорируемых, on=false убирает их, reset=true очищает список целиком */
+function setIgnoredIssues(instanceId, keys, on, reset) {
+  const all = loadInstances();
+  const rec = all.find(i => i.id === instanceId);
+  if (!rec) throw new Error('Установка не найдена');
+  let list = new Set(reset ? [] : (rec.ignoredIssues || []));
+  for (const k of (Array.isArray(keys) ? keys : [])) { const key = String(k).slice(0, 300); if (on) list.add(key); else list.delete(key); }
+  rec.ignoredIssues = [...list].slice(-500);
+  saveInstances(all);
+  return rec.ignoredIssues.length;
 }
 
 /* ---------- настройки экземпляра и скриншоты ---------- */
@@ -2890,7 +2944,7 @@ async function downloadAllZip({ items, mc, loader, dest }, report) {
 module.exports = {
   installBatch, downloadAllZip, exportMrpack, checkModUpdates, updateMods, checkPackUpdate, updatePack, copyInstance,
   installModFile, installResource, installResourceFile, listResources,
-  init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, optifineList, optifineInfo, installOptifine,
+  init, DIRS, OS, ARCH, LOADERS, startJob, cancelJob, CANCELLED, setIgnoredIssues, optifineList, optifineInfo, installOptifine,
   listVersions, listInstances, listInstancesLive, getInstance, createInstance, deleteInstance,
   loaderOptions, changeLoader, sysInfo, recommendRam, effectiveRam, maxRam, watchInstances, ensureAuthlib,
   launch, isRunning, anyRunning, installMod, listMods, toggleMod, removeMod, instDir, updateInstance, listScreenshots, setIconFile, clearIcon, setBgFile, clearBg, backgroundFor, installMrpack, packVersions, installMods, checkMods, setCurseKeyProvider, hasCurseKey, javaStatus, javaUpdate, javaCatalog, javaInstall, javaRemove, cfSearch, cfCategories, cfDetails, cfFiles, cfPackVersions, installCfMod, installCfPack, installPackAny,

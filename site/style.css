@@ -948,10 +948,11 @@ body{background:var(--bg-0)!important;background-attachment:scroll!important;min
 #lcDl .dl-t{overflow:hidden;text-overflow:ellipsis;min-width:0}
 #lcDl .dl-n small{flex:none}
 #lcDl .dl-ic{flex:none;position:relative;width:16px;height:16px;border-radius:50%;background:var(--accent-soft);color:var(--accent);overflow:hidden}
-#lcDl .dl-ic::before{content:"";position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-4px 0 0 -3px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);animation:dl-arrow 1s ease-in infinite}
+#lcDl .dl-ic{--dl-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.25 8 9.75l3.5-3.5'/%3E%3C/svg%3E");--dl-check:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 8.25 7 10.75l4.5-5'/%3E%3C/svg%3E")}
+#lcDl .dl-ic::before{content:"";position:absolute;inset:0;background:currentColor;-webkit-mask:var(--dl-arrow) center/16px 16px no-repeat;mask:var(--dl-arrow) center/16px 16px no-repeat;animation:dl-arrow 1s ease-in infinite}
 #lcDl .dl-i.done .dl-ic{background:var(--accent);color:var(--accent-ink);animation:dl-pop .45s cubic-bezier(.3,1.6,.5,1)}
-#lcDl .dl-i.done .dl-ic::before{width:4px;height:8px;margin:-6px 0 0 -2px;border-width:0 2px 2px 0;animation:none}
-@keyframes dl-arrow{0%{transform:translateY(-9px) rotate(45deg);opacity:0}40%{opacity:1}100%{transform:translateY(7px) rotate(45deg);opacity:0}}
+#lcDl .dl-i.done .dl-ic::before{-webkit-mask-image:var(--dl-check);mask-image:var(--dl-check);animation:none}
+@keyframes dl-arrow{0%{transform:translateY(-9px);opacity:0}40%{opacity:1}100%{transform:translateY(7px);opacity:0}}
 @keyframes dl-pop{0%{transform:scale(.4)}100%{transform:scale(1)}}
 #lcDl .dl-bar{position:relative;height:6px;margin:6px 0 4px;border-radius:99px;background:var(--surface-2);overflow:hidden}
 #lcDl .dl-bar i{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .35s ease-out}
@@ -1067,6 +1068,10 @@ dialog.fav-pick{width:min(440px,calc(100vw - 24px))}
 .cm-mods{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .cm-chip{padding:1px 8px;font-size:12px;border:1px solid var(--line-hard);border-radius:999px;color:var(--text);background:var(--surface-2);overflow-wrap:anywhere}
 .cm-note{margin:10px 0 0;font-size:12px;color:var(--muted)}
+.cm-txt{flex:1;min-width:0}
+.cm-ignore,.cm-ignore-all,.cm-unignore{flex:none;padding:4px 10px;font-size:12px;line-height:1.3;white-space:nowrap}
+.cm-ignore{align-self:flex-start;margin-left:auto}
+.cm-hidden{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .cm-box.compact{padding:10px 12px;margin:0}
 .cm-pre{margin-top:8px}
 .cm-pre .cm-box{margin:0}

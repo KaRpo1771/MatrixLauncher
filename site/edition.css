@@ -42,6 +42,9 @@ html:not(.has-bg) .lc-bg.empty, .hero-home {
 .content .setting-card h3 {font-size:18px;letter-spacing:-.025em}
 .set-sec .set-sec-h::after {height:1px}
 .content :is(.chip,.pg),dialog .chip {border-radius:99px!important}
+/* номера страниц: квадрат со скруглёнными углами (кнопки «Назад» / «Вперёд» остаются продолговатыми) */
+.content .pg:not(.pg-nav){border-radius:10px!important;min-width:40px;padding:0 6px}
+@media (max-width:560px){.content .pg:not(.pg-nav){min-width:36px}}
 .content .search,.content select {background-color:var(--bg)}
 .content .state {padding:32px;text-align:center}
 dialog {border:1px solid var(--line-hard);border-radius:16px!important}

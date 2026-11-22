@@ -200,19 +200,46 @@
   async function cancelTask(key) {
     const e = DL.get(key);
     if (!e || !e.task || e.done || e.error || e.cancelling) return;
-    const yes = await ask({ title: e.cancelTitle || 'Отменить скачивание?', text: `«${e.title}» будет остановлено.\n${e.cancelText || 'Уже скачанное для этого экземпляра и недоделанная установка удалятся.'}`,
+    if (e.queued && dropQueued(key)) return;   // ещё стоит в очереди: просто убираем, ничего не скачано
+    const yes = e.solo ? true : await ask({ title: e.cancelTitle || 'Отменить скачивание?', text: `«${e.title}» будет остановлено.\n${e.cancelText || 'Уже скачанное для этого экземпляра и недоделанная установка удалятся.'}`,
       ok: 'Да, отменить', cancel: e.cancelKeep || 'Продолжить скачивание', danger: true });
     if (!yes) return;
     const cur = DL.get(key);
     if (!cur || cur.done || cur.error) { note('Скачивание уже завершилось'); return; }
     cur.cancelling = true; cur.status = 'Отменяю…'; dlPaint();
     try {
-      const was = await call('task:cancel', key === 'task:mod' ? 'mod' : 'create');
+      const was = await call('task:cancel', key.startsWith('task:mod:') ? 'mod:' + key.slice(9) : key === 'task:mod' ? 'mod' : 'create');
       if (!was) { cur.cancelling = false; note('Сейчас нечего отменять'); dlPaint(); }
     } catch (ex) { cur.cancelling = false; note(ex.message); dlPaint(); }
   }
   function dlLeave(e, ms) {
     e.t = setTimeout(() => { e.leaving = true; dlPaint(); e.t = setTimeout(() => { DL.delete(e.file); dlPaint(); }, 360); }, ms);
+  }
+  /* --- несколько модов подряд: у каждого своя плашка и своя отмена; одновременно качаются не больше трёх, остальные ждут в очереди --- */
+  let modSeq = 0;
+  const MODQ = { running: 0, wait: [], max: 3 };
+  const modKey = n => 'task:mod:' + n;
+  function pumpModQueue() { while (MODQ.running < MODQ.max && MODQ.wait.length) MODQ.wait.shift().run(); }
+  function enqueueMod(key, start) {
+    return new Promise((resolve, reject) => {
+      const item = {
+        key,
+        run() {
+          MODQ.running++;
+          const e = DL.get(key); if (e) { e.queued = false; e.status = 'Подготовка…'; dlPaint(); }
+          Promise.resolve().then(start).then(resolve, reject).finally(() => { MODQ.running--; pumpModQueue(); });
+        },
+        drop() { reject(new Error('Скачивание отменено')); }
+      };
+      if (MODQ.running < MODQ.max) item.run();
+      else { const e = DL.get(key); if (e) { e.queued = true; e.status = 'В очереди'; dlPaint(); } MODQ.wait.push(item); }
+    });
+  }
+  function dropQueued(key) {
+    const i = MODQ.wait.findIndex(x => x.key === key);
+    if (i < 0) return false;
+    MODQ.wait.splice(i, 1)[0].drop();
+    return true;
   }
   function dlUpdate(p) {
     let e = DL.get(p.file);
@@ -275,11 +302,19 @@
     mm.on('progress', p => {
       if (p.text) pushLog(p.text);
       if (p.log) return;
-      if (p.key === 'mod' && p.file) { dlUpdate(p); if (S.ofFile && p.file === S.ofFile) ofProgress(p); }
+      if (p.key === 'mod' && p.file) {
+        const solo = p.task ? DL.get(modKey(p.task)) : null;   // при установке одного мода файловую строку не рисуем: прогресс уже виден в его плашке
+        const isOf = !!S.ofFile && p.file === S.ofFile;
+        if (solo && solo.solo && !isOf) {
+          // прогресс файла переносим в саму плашку мода: полоса и «N из M МБ» вместо отдельной строки
+          if (!p.done && !p.error && p.total) taskProgress(modKey(p.task), `${p.dependency ? 'Зависимость' : 'Скачиваю'}: ${fmtMb(p.received)} из ${fmtMb(p.total)}`, p.received / p.total);
+        } else dlUpdate(p);
+        if (isOf) ofProgress(p);
+      }
       if (p.key === 'create') { if (!(S.packBusy && S.dlg && S.dlg.kind === 'settings')) setProgress('lcBar', 'lcStat', p.text, p.pct); setProgress('lcPackBar', 'lcPackStat', p.text, p.pct); setProgress('lcCopyBar', 'lcCopyStat', p.text, p.pct); setProgress('lcExportBar', 'lcExportStat', p.text, p.pct); taskProgress('task:create', p.text, p.pct); }
       else if (p.key === 'dlall') { taskProgress('task:mod', p.text, p.pct); }
       else if (p.key === 'many') { setProgress('lcManyBar', 'lcManyStat', p.text, p.pct); taskProgress('task:mod', p.text, p.pct); }
-      else if (p.key === 'mod') { setProgress('lcModBar', 'lcModStat', p.text, p.pct); if (p.text) taskProgress('task:mod', p.text, p.pct); }
+      else if (p.key === 'mod') { setProgress('lcModBar', 'lcModStat', p.text, p.pct); if (p.text) taskProgress(p.task ? modKey(p.task) : 'task:mod', p.text, p.pct); }
       else if (p.key && p.key.startsWith('launch:')) setProgress('lcPlayBar', 'lcPlayStat', p.text, p.pct);
     });
     mm.on('game-log', g => pushLog(g.line));
@@ -426,8 +461,8 @@
     return chip(`Minecraft ${esc(inst.mc)}`)
       + chip(`${esc(LD[inst.loader] || inst.loader)}${inst.loaderVersion ? ' ' + esc(inst.loaderVersion) : ''}`)
       + chip(`ОЗУ: ${ram}`)
-      + chip(`модов: ${inst.modCount != null ? inst.modCount : (inst.mods || []).length}`)
-      + (inst.playMs ? chip(`наиграно: ${playTime(inst.playMs)}`) : '');
+      + chip(`Модов: ${inst.modCount != null ? inst.modCount : (inst.mods || []).length}`)
+      + (inst.playMs ? chip(`Наиграно: ${playTime(inst.playMs)}`) : '');
   }
   function updateMeta() { const m = $id('lcMeta'); if (m) m.innerHTML = metaText(cur()); }
 
@@ -1491,22 +1526,57 @@
     try {
       const r = await call('mod:check', id);
       if (seq !== compatSeq || !$id('lcCompat')) return;
-      box.innerHTML = r.scanned ? compatHTML(r.issues, { note: `Проверено файлов: ${r.scanned}. Читаются описания внутри .jar: одинаковые файлы, две версии одного мода, чужой загрузчик, недостающие зависимости и известные конфликты.` })
+      box.innerHTML = r.scanned ? compatHTML(r.issues, { instanceId: id, ignored: r.ignored, note: `Проверено файлов: ${r.scanned}. Читаются описания внутри .jar: одинаковые файлы, две версии одного мода, чужой загрузчик, недостающие зависимости и известные конфликты.` })
         : '<p class="filter-note">В папке mods пока нет файлов, проверять нечего.</p>';
     } catch (e) { if (seq === compatSeq && $id('lcCompat')) box.innerHTML = `<p class="filter-note">${esc(e.message)}</p>`; }
   }
-  /* после установки: если нашлись ошибки или предупреждения, показываем их сразу */
-  async function postInstallCheck(instanceId) {
-    try {
-      const r = await call('mod:check', instanceId);
-      const c = Compat.count(r.issues);
-      if (c.error || c.warn) {
-        const inst = S.instances.find(x => x.id === instanceId);
-        await openDlg('compat', { name: inst ? inst.name : '', id: instanceId, issues: r.issues.filter(i => i.level !== 'info'), scanned: r.scanned });
-      }
-      return r;
-    } catch (e) { return null; }
+  /* после установки: если нашлись ошибки или предупреждения, показываем их сразу.
+     Проверка откладывается и ждёт, пока докачаются остальные моды, поэтому при нескольких загрузках подряд окно появляется один раз.
+     Проблемы, отмеченные кнопкой «Игнорировать», сюда не попадают. */
+  const pcTimers = new Map();
+  function postInstallCheck(instanceId) {
+    clearTimeout(pcTimers.get(instanceId));
+    pcTimers.set(instanceId, setTimeout(async () => {
+      pcTimers.delete(instanceId);
+      if ([...DL.values()].some(e => e.task && e.solo && !e.done && !e.error)) { postInstallCheck(instanceId); return; }
+      try {
+        const r = await call('mod:check', instanceId);
+        const c = Compat.count(r.issues);
+        if (c.error || c.warn) {
+          const inst = S.instances.find(x => x.id === instanceId);
+          await openDlg('compat', { name: inst ? inst.name : '', id: instanceId, issues: r.issues.filter(i => i.level !== 'info'), scanned: r.scanned, ignored: r.ignored });
+        }
+      } catch (e) { /* проверка не критична */ }
+    }, 1500));
+    return Promise.resolve(null);
   }
+  /* «Игнорировать» / «Игнорировать все» / «Вернуть скрытые» в плашках проверки совместимости */
+  async function refreshCompatViews(id) {
+    if ($id('lcCompat')) runCompat(id);
+    if (S.dlg && S.dlg.kind === 'compat' && S.dlg.arg && S.dlg.arg.id === id) {
+      const r = await call('mod:check', id);
+      const issues = r.issues.filter(i => i.level !== 'info');
+      const c = Compat.count(issues);
+      if (!c.error && !c.warn) { const d = $id('lcDlg'); if (d) d.close(); return; }
+      S.dlg.arg = { ...S.dlg.arg, issues, scanned: r.scanned, ignored: r.ignored };
+      paintDlg();
+    }
+  }
+  document.addEventListener('click', async ev => {
+    const b = ev.target.closest && ev.target.closest('.cm-ignore, .cm-ignore-all, .cm-unignore');
+    if (!b) return;
+    const box = b.closest('.cm-box'), id = box && box.dataset.inst;
+    if (!id) return;
+    b.disabled = true;
+    try {
+      if (b.classList.contains('cm-unignore')) await call('mod:ignore', { instanceId: id, reset: true });
+      else {
+        const keys = b.classList.contains('cm-ignore-all') ? [...box.querySelectorAll('.cm-ignore')].map(x => x.dataset.key) : [b.dataset.key];
+        await call('mod:ignore', { instanceId: id, keys, on: true });
+      }
+      await refreshCompatViews(id);
+    } catch (ex) { b.disabled = false; note(ex.message); }
+  });
 
   async function fillVersions() {
     const sel = $id('lcMc');
@@ -1579,7 +1649,7 @@
         <p class="filter-note">Лаунчер скачает нужную версию Minecraft и загрузчик, затем все файлы сборки. Это может занять несколько минут.</p></div>` + foot;
     } else if (k === 'compat') {
       const a = S.dlg.arg;
-      d.innerHTML = head('Проверка совместимости', a.name ? `Установка «${a.name}»` : '') + `<div class="m-body">${compatHTML(a.issues, { note: `Проверено файлов в папке mods: ${a.scanned}. Исправить можно в «Настройки экземпляра» → «Моды в этой установке».` })}</div>` + foot;
+      d.innerHTML = head('Проверка совместимости', a.name ? `Установка «${a.name}»` : '') + `<div class="m-body">${compatHTML(a.issues, { instanceId: a.id, ignored: a.ignored, note: `Проверено файлов в папке mods: ${a.scanned}. Исправить можно в «Настройки экземпляра» → «Моды в этой установке».` })}</div>` + foot;
     } else if (k === 'crash') {
       const c = S.dlg.arg;
       d.innerHTML = head('Игра завершилась с ошибкой', `${c.name}${c.mc ? ' · ' + c.mc : ''}${c.loader && c.loader !== 'vanilla' ? ' · ' + c.loader : ''}`) + `<div class="m-body">${crashBody(c)}</div>` + foot;
@@ -2102,18 +2172,20 @@
         close(); saveModTarget(inst.id);
         let fname = '';
         try { fname = decodeURIComponent(new URL(v.file).pathname.split('/').pop() || ''); } catch (e) { /* имя возьмём из названия */ }
-        taskStart('task:mod', `${isRes ? RES_WORD[m.kind] : 'Мод'} «${m.title}»`, 'установка');
+        const tn = ++modSeq, tk = modKey(tn);
+        taskStart(tk, `${isRes ? RES_WORD[m.kind] : 'Мод'} «${m.title}»`, 'установка', { solo: true });   // solo: одна плашка с названием и своей отменой, без второй строки с именем .jar
         note(`Скачиваю «${m.title}» ${v.name}…`);
         try {
-          if (isRes) await call('res:installFile', { instanceId: inst.id, kind: m.kind, url: v.file, filename: fname, title: m.title, slug: m.cfId ? 'cf:' + m.cfId : (m.slug || String(m.id)), version: v.name });
-          else await call('mod:installFile', { instanceId: inst.id, url: v.file, filename: fname, title: m.title, slug: m.slug || String(m.id), version: v.name });
-          taskEnd('task:mod', true, 'Готово');
+          await enqueueMod(tk, () => isRes
+            ? call('res:installFile', { instanceId: inst.id, kind: m.kind, url: v.file, filename: fname, title: m.title, slug: m.cfId ? 'cf:' + m.cfId : (m.slug || String(m.id)), version: v.name, taskId: tn })
+            : call('mod:installFile', { instanceId: inst.id, url: v.file, filename: fname, title: m.title, slug: m.slug || String(m.id), version: v.name, taskId: tn }));
+          taskEnd(tk, true, 'Готово');
           note(`«${m.title}» ${v.name} установлен в «${inst.name}»`);
           await reloadInstances(); if (onHome()) updateMeta();
           if (!isRes) postInstallCheck(inst.id);
         } catch (err) {
-          if (isCancel(err)) { taskCancelled('task:mod'); note(`Установка «${m.title}» отменена`); }
-          else { taskEnd('task:mod', false, err.message); note(err.message); }
+          if (isCancel(err)) { taskCancelled(tk); note(`Установка «${m.title}» отменена`); }
+          else { taskEnd(tk, false, err.message); note(err.message); }
         }
       }
     });
@@ -2255,22 +2327,23 @@
       if (S.packBusy || S.creating) { note('Другое скачивание ещё идёт, дождитесь окончания'); return; }
       const btn = $id('lcMiBtn'), selEl = $id('lcMiSel'), w = $id('lcModInstall');
       btn.disabled = true; selEl.disabled = true;
-      taskStart('task:mod', `Мод «${m.title}»`, 'установка');
+      const tn = ++modSeq, tk = modKey(tn);
+      taskStart(tk, `Мод «${m.title}»`, 'установка', { solo: true });
       const msg = document.createElement('div'); msg.className = 'bg-note'; msg.id = 'lcModNote';
-      msg.innerHTML = '<b>Скачивание началось</b><p>Окно можно закрыть, установка продолжится в фоне. Прогресс виден в плашке «Загрузки» справа.</p><button class="btn danger" data-act="task-cancel" data-key="task:mod" type="button">Отменить скачивание</button>';
+      msg.innerHTML = `<b>Скачивание началось</b><p>Окно можно закрыть, установка продолжится в фоне. Можно сразу открыть другой мод и скачать его: у каждого скачивания своя плашка «Загрузки» справа и своя кнопка отмены.</p><button class="btn danger" data-act="task-cancel" data-key="${tk}" type="button">Отменить скачивание</button>`;
       if (w && !$id('lcModNote')) w.appendChild(msg);
       note(`Скачиваю «${m.title}»…`);
       try {
-        const done = await call('mod:install', { instanceId, slug: m.slug, source: m.source, cfId: m.source === 'curseforge' ? cfIdOf(m) : undefined });
-        taskEnd('task:mod', true, 'Готово');
+        const done = await enqueueMod(tk, () => call('mod:install', { instanceId, slug: m.slug, source: m.source, cfId: m.source === 'curseforge' ? cfIdOf(m) : undefined, taskId: tn }));
+        taskEnd(tk, true, 'Готово');
         const same = done.length === 1 && done[0].cached;
         note(same ? `«${m.title}» уже установлен, файл идентичен, повторно не скачивал`
           : done.length > 1 ? `«${m.title}» установлен, зависимостей: ${done.length - 1}` : `«${m.title}» установлен`);
         await reloadInstances(); if (onHome()) updateMeta();
         postInstallCheck(instanceId);
       } catch (err) {
-        if (isCancel(err)) { taskCancelled('task:mod'); note(`Установка «${m.title}» отменена`); }
-        else { taskEnd('task:mod', false, err.message); note(err.message); }
+        if (isCancel(err)) { taskCancelled(tk); note(`Установка «${m.title}» отменена`); }
+        else { taskEnd(tk, false, err.message); note(err.message); }
       } finally {
         const b2 = $id('lcMiBtn'), s2 = $id('lcMiSel'), n2 = $id('lcModNote');
         if (b2) b2.disabled = false;

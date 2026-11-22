@@ -1255,11 +1255,24 @@ const KIND_LABEL = {mod:"мода", modpack:"сборки", plugin:"плагин
 let catalog = null;   // состояние текущей страницы каталога
 let catController = null;
 
+/* Фильтры и номер страницы каждого каталога (моды, сборки, плагины…) запоминаются, пока открыт лаунчер:
+   при возврате на страницу остаётся всё, что выбрал пользователь. «Сбросить фильтры» и поиск с главной начинают с чистого листа. */
+const CAT_KEEP = ["q","cat","loader","gv","sort","pluginSource","allSource","src","page"];
+const catMemory = new Map();
+function saveCatalogState(){
+  if(!catalog || !catalog.kind) return;
+  const o = {}; CAT_KEEP.forEach(k=> o[k] = catalog[k]);
+  catMemory.set(catalog.kind, o);
+}
+
 function renderCatalogPage(kind, opts){
   const def = CATALOG_DEF[kind];
+  const saved = opts && (opts.fresh || opts.q) ? null : catMemory.get(kind);
+  if(!saved) catMemory.delete(kind);
   catalog = {
     kind, q:(opts&&opts.q)||"", cat:"", loader:"", gv:"", sort:getDefaultSort(),
-    pluginSource:"both", allSource:"both", src:"modrinth", offset:0, page:1, items:[], rawAll:[], total:null, exhausted:false, offline:false
+    pluginSource:"both", allSource:"both", src:"modrinth", offset:0, page:1, items:[], rawAll:[], total:null, exhausted:false, offline:false,
+    ...(saved || {})
   };
 
   const content = $("content");
@@ -1318,6 +1331,10 @@ function renderCatalogPage(kind, opts){
 
   $("q").value = catalog.q;
   $("sort").value = catalog.sort;
+  // кнопки источников в разметке по умолчанию стоят на первом пункте: выставляем те, что были выбраны раньше
+  [["pluginSrc","pluginSource"],["allSrc","allSource"],["srcChoice","src"]].forEach(([id,key])=>{
+    const box = $(id); if(box) box.querySelectorAll(".chip").forEach(c=> c.setAttribute("aria-pressed", String(c.dataset.value === catalog[key])));
+  });
   const paintView = ()=>{
     $("viewToggle").querySelectorAll("button").forEach(b=> b.setAttribute("aria-pressed", String(b.dataset.view === settings.view)));
     $("grid").classList.toggle("compact", settings.view === "compact");
@@ -1403,6 +1420,10 @@ function renderCatalogPage(kind, opts){
   getGameVersions().then(vs=>{
     const sel = $("gv"); if(!sel) return;
     vs.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; sel.appendChild(o); });
+    if(catalog && catalog.gv){
+      if(!vs.includes(catalog.gv)){ const o=document.createElement("option"); o.value=catalog.gv; o.textContent=catalog.gv; sel.appendChild(o); }
+      sel.value = catalog.gv;
+    }
   });
 
   let debounce;
@@ -1417,7 +1438,7 @@ function renderCatalogPage(kind, opts){
     if(e.key === "Escape" && qi.value){ e.preventDefault(); qClear.click(); }
   });
   qClear.addEventListener("click", ()=>{ qi.value = ""; syncClear(); runSearch(); qi.focus(); });
-  $("resetFilters").addEventListener("click", ()=> renderCatalogPage(catalog.kind));
+  $("resetFilters").addEventListener("click", ()=> renderCatalogPage(catalog.kind, {fresh:true}));
   $("sort").addEventListener("change", e=>{ catalog.sort = e.target.value; loadCatalog(); });
   $("gv").addEventListener("change", e=>{
     catalog.gv = e.target.value;
@@ -1444,7 +1465,7 @@ function renderCatalogPage(kind, opts){
     if(v) goPage(v);
   });
 
-  loadCatalog();
+  loadCatalog({keepPage: catalog.page > 1});   // вернулись на страницу: открываем ту страницу списка, на которой остановились
 }
 
 function buildChips(container, values, key, clientOnly){
@@ -1727,15 +1748,21 @@ function compatHTML(issues, o){
             : n.warn ? `<b class="cm-sum warn">Предупреждений: ${n.warn}</b>`
             : `<b class="cm-sum ok">Конфликтов не найдено</b>`;
   const ICON = {error:"✕", warn:"!", info:"i"};
+  const canIgnore = !!o.instanceId;   // кнопки «Игнорировать» только у проверки установленных модов, у неё есть ключ проблемы
   const items = list.map(i=>{
     const mods = (i.mods||[]);
     const chips = mods.slice(0,8).map(t=>`<span class="cm-chip">${cmEsc(t)}</span>`).join("") + (mods.length>8 ? `<span class="cm-chip">+${mods.length-8}</span>` : "");
+    const ign = canIgnore && i.key ? `<button class="btn cm-ignore" type="button" data-key="${cmEsc(i.key)}" title="Больше не показывать эту проблему для этой установки">Игнорировать</button>` : "";
     return `<li class="cm-i ${i.level}"><span class="cm-ico" aria-hidden="true">${ICON[i.level]||"i"}</span>
-      <div><b>${cmEsc(i.title)}</b><p>${cmEsc(i.text)}</p>${chips ? `<div class="cm-mods">${chips}</div>` : ""}</div></li>`;
+      <div class="cm-txt"><b>${cmEsc(i.title)}</b><p>${cmEsc(i.text)}</p>${chips ? `<div class="cm-mods">${chips}</div>` : ""}</div>${ign}</li>`;
   }).join("");
-  return `<section class="cm-box ${n.error ? "has-err" : n.warn ? "has-warn" : "is-ok"}" aria-label="Проверка совместимости">
-    <div class="cm-head"><span class="cm-title">Проверка совместимости</span>${sum}</div>
+  const keyed = list.filter(i=> i.key).length;
+  const ignAll = canIgnore && keyed > 1 ? `<button class="btn cm-ignore-all" type="button">Игнорировать все</button>` : "";
+  const hidden = canIgnore && o.ignored > 0 ? `<p class="cm-note cm-hidden">Скрыто проблем: ${o.ignored} <button class="btn cm-unignore" type="button">Вернуть скрытые</button></p>` : "";
+  return `<section class="cm-box ${n.error ? "has-err" : n.warn ? "has-warn" : "is-ok"}" aria-label="Проверка совместимости"${canIgnore ? ` data-inst="${cmEsc(o.instanceId)}"` : ""}>
+    <div class="cm-head"><span class="cm-title">Проверка совместимости</span>${sum}${ignAll}</div>
     ${items ? `<ul class="cm-list">${items}</ul>` : ""}
+    ${hidden}
     ${o.note===false ? "" : `<p class="cm-note">${cmEsc(o.note || "Проверка смотрит на загрузчики, версии игры, повторы и список известных конфликтов. Это подсказка, а не гарантия: точно проверить можно только запуском игры.")}</p>`}
   </section>`;
 }
@@ -2463,6 +2490,7 @@ function renderServersPage(){
 const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки", servers:"Мониторинг"};
 
 function setPage(page, opts){
+  if(CATALOG_PAGES.includes(state.page)) saveCatalogState();   // запоминаем фильтры и страницу каталога, с которого уходим
   state.page = page;
   window.LauncherUI?.presence?.(page);
   document.body.classList.remove("lc-home");

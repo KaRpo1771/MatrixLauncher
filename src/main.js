@@ -140,11 +140,20 @@ function showLauncher(focus) {
   if (focus) win.focus();
 }
 
+const modBusy = new Map();   // установка → сколько модов в неё качается параллельно
 function lock(id) {
-  if (busy.has(id)) throw new Error('С этой установкой уже идёт операция, дождитесь окончания');
+  if (busy.has(id) || modBusy.get(id)) throw new Error('С этой установкой уже идёт операция, дождитесь окончания');
   busy.add(id);
   return () => busy.delete(id);
 }
+/* общая блокировка для установки одиночных модов: их можно качать несколько сразу, но не вместе с тяжёлой операцией над установкой */
+function lockMods(id) {
+  if (busy.has(id)) throw new Error('С этой установкой уже идёт операция, дождитесь окончания');
+  modBusy.set(id, (modBusy.get(id) || 0) + 1);
+  return () => { const n = (modBusy.get(id) || 1) - 1; if (n) modBusy.set(id, n); else modBusy.delete(id); };
+}
+/* у каждой плашки загрузки свой ключ задачи (mod:<номер>), поэтому отмена трогает только её */
+const jobKey = taskId => (/^\d+$/.test(String(taskId || '')) ? 'mod:' + taskId : 'mod');
 
 function registerIpc() {
   /* --- игровые аккаунты Minecraft (регистрации в лаунчере нет) --- */
@@ -277,7 +286,7 @@ function registerIpc() {
     try { await core.deleteInstance(id); } finally { release(); }
   });
   // отмена текущего скачивания версии или установки сборки (мод-установки не затрагивает)
-  handle('task:cancel', key => core.cancelJob(key === 'mod' ? 'mod' : 'create'));
+  handle('task:cancel', key => core.cancelJob(key === 'mod' || /^mod:\d+$/.test(String(key)) ? String(key) : 'create'));
   handle('loader:options', mc => core.loaderOptions(mc));
   handle('inst:setLoader', async ({ id, loader, loaderVersion }) => {
     const release = lock(id);
@@ -417,16 +426,19 @@ function registerIpc() {
   });
 
   /* --- моды --- */
-  handle('mod:install', async ({ instanceId, slug, source, cfId }) => {
-    const release = lock(instanceId);
+  handle('mod:install', async ({ instanceId, slug, source, cfId, taskId }) => {
+    const release = lockMods(instanceId);
     try {
-      const rp = (text, pct, extra) => send('progress', { key: 'mod', text, pct, ...(extra || {}) });
-      return await withTask('mods', () => core.startJob(() => source === 'curseforge' ? core.installCfMod({ instanceId, cfId: cfId || slug }, rp) : core.installMod({ instanceId, slug }, rp), 'mod'));
+      const rp = (text, pct, extra) => send('progress', { key: 'mod', task: taskId, text, pct, ...(extra || {}) });
+      return await withTask('mods', () => core.startJob(() => source === 'curseforge' ? core.installCfMod({ instanceId, cfId: cfId || slug }, rp) : core.installMod({ instanceId, slug }, rp), jobKey(taskId)));
     } finally { release(); }
   });
-  handle('mod:installFile', async ({ instanceId, url, filename, title, slug, version }) => {
-    const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'mod', text, pct });
-    return await withTask('mods', () => core.startJob(() => core.installModFile({ instanceId, url, filename, title, slug, version }, rp), 'mod'));
+  handle('mod:installFile', async ({ instanceId, url, filename, title, slug, version, taskId }) => {
+    const release = lockMods(instanceId);
+    try {
+      const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', task: taskId, ...extra }) : send('progress', { key: 'mod', task: taskId, text, pct });
+      return await withTask('mods', () => core.startJob(() => core.installModFile({ instanceId, url, filename, title, slug, version }, rp), jobKey(taskId)));
+    } finally { release(); }
   });
   handle('mod:installMany', async ({ instanceId, slugs }) => {
     const release = lock(instanceId);
@@ -454,16 +466,19 @@ function registerIpc() {
   });
   /* --- ресурспаки и шейдеры: в resourcepacks / shaderpacks выбранного экземпляра (любой загрузчик, в том числе Vanilla) --- */
   const resTask = kind => (kind === 'shader' ? 'shader' : 'resourcepack');
-  handle('res:install', async ({ instanceId, kind, slug, source, cfId }) => {
-    const release = lock(instanceId);
+  handle('res:install', async ({ instanceId, kind, slug, source, cfId, taskId }) => {
+    const release = lockMods(instanceId);
     try {
-      const rp = (text, pct, extra) => send('progress', { key: 'mod', text, pct, ...(extra || {}) });
-      return await withTask(resTask(kind), () => core.startJob(() => core.installResource({ instanceId, kind, source, slug, cfId }, rp), 'mod'));
+      const rp = (text, pct, extra) => send('progress', { key: 'mod', task: taskId, text, pct, ...(extra || {}) });
+      return await withTask(resTask(kind), () => core.startJob(() => core.installResource({ instanceId, kind, source, slug, cfId }, rp), jobKey(taskId)));
     } finally { release(); }
   });
-  handle('res:installFile', async ({ instanceId, kind, url, filename, title, slug, version }) => {
-    const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', ...extra }) : send('progress', { key: 'mod', text, pct });
-    return await withTask(resTask(kind), () => core.startJob(() => core.installResourceFile({ instanceId, kind, url, filename, title, slug, version }, rp), 'mod'));
+  handle('res:installFile', async ({ instanceId, kind, url, filename, title, slug, version, taskId }) => {
+    const release = lockMods(instanceId);
+    try {
+      const rp = (text, pct, extra) => extra ? send('progress', { key: 'mod', task: taskId, ...extra }) : send('progress', { key: 'mod', task: taskId, text, pct });
+      return await withTask(resTask(kind), () => core.startJob(() => core.installResourceFile({ instanceId, kind, url, filename, title, slug, version }, rp), jobKey(taskId)));
+    } finally { release(); }
   });
   handle('res:list', ({ instanceId, kind }) => core.listResources(instanceId, kind));
   /* --- OptiFine: список версий для Minecraft экземпляра и установка в папку mods --- */
@@ -520,6 +535,7 @@ function registerIpc() {
   handle('mod:all', id => core.listMods(id, { all: true }));
   handle('mod:toggle', ({ instanceId, file, enabled }) => core.toggleMod(instanceId, file, !!enabled));
   handle('mod:check', id => core.checkMods(id));
+  handle('mod:ignore', ({ instanceId, keys, on, reset }) => core.setIgnoredIssues(instanceId, keys, on !== false, !!reset));
   handle('mod:remove', ({ instanceId, file }) => core.removeMod(instanceId, file));
 }
 
