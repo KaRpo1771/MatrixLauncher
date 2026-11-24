@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, shell, session, dialog } = require('electro
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const http = require('http');
 const core = require('./core');
 const accounts = require('./accounts');
 const updater = require('./updater');
@@ -30,6 +31,41 @@ const busy = new Set(); // установки, с которыми сейчас 
 
 function send(channel, data) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, data);
+}
+
+/* ---------- встроенный плеер роликов ----------
+   Страница лаунчера открыта с file://, у неё нет адреса-источника, а YouTube без него не показывает ролик
+   (чёрный экран или ошибка 153). Поэтому ролик встраивается в крошечную страницу с локального сервера
+   (127.0.0.1, случайный порт, наружу не виден), а уже она вставляется в окно просмотра. */
+const EMBED_HOSTS = new Set(['www.youtube-nocookie.com', 'www.youtube.com', 'player.vimeo.com', 'streamable.com', 'www.dailymotion.com', 'player.bilibili.com']);
+let embedBase = null, embedStarting = null;
+function startEmbedServer() {
+  if (embedBase) return Promise.resolve(embedBase);
+  if (embedStarting) return embedStarting;
+  embedStarting = new Promise(resolve => {
+    const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const srv = http.createServer((req, res) => {
+      let src = null;
+      try {
+        const u = new URL(req.url, 'http://localhost');
+        if (u.pathname === '/player') {
+          const e = new URL(u.searchParams.get('src') || '');
+          if (e.protocol === 'https:' && EMBED_HOSTS.has(e.hostname)) {
+            if (/youtube/.test(e.hostname)) e.searchParams.set('origin', embedBase);
+            src = e.href;
+          }
+        }
+      } catch { src = null; }
+      if (!src) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Cache-Control': 'no-store' });
+      res.end('<!doctype html><meta charset="utf-8"><meta name="referrer" content="strict-origin-when-cross-origin">'
+        + '<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}iframe{position:absolute;inset:0;width:100%;height:100%;border:0}</style>'
+        + '<iframe src="' + esc(src) + '" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>');
+    });
+    srv.on('error', () => { embedStarting = null; resolve(null); });
+    srv.listen(0, '127.0.0.1', () => { embedBase = 'http://localhost:' + srv.address().port; resolve(embedBase); });
+  });
+  return embedStarting;
 }
 
 function handle(channel, fn) {
@@ -222,6 +258,7 @@ function registerIpc() {
       timer: o.showTimer
     };
   });
+  handle('embed:base', () => startEmbedServer());
   handle('settings:get', () => ({ ...accounts.publicSettings(), discordBuiltIn: !!DISCORD_APP_ID, discordConnected: rpc.active }));
   handle('settings:set', patch => {
     const r = accounts.setSettings(patch || {});
@@ -601,6 +638,10 @@ app.whenReady().then(() => {
 
   // страница открыта с file://, поэтому разрешаем ей читать открытые API (Modrinth, Hangar, Spiget и др.)
   session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
+    // Запросы самих встроенных плееров (YouTube и др.) идут со страницы с http(s)-адресом, у них есть Referer.
+    // Им заголовок «Access-Control-Allow-Origin: *» подменять нельзя: плеер ходит за видео с куками, а «*» с куками
+    // браузер отклоняет, и ролик вечно крутит индикатор загрузки. Подмена нужна только страницам лаунчера (file://, без Referer).
+    if (/^https?:/i.test(details.referrer || '')) return cb({ responseHeaders: details.responseHeaders });
     const h = { ...details.responseHeaders };
     for (const k of Object.keys(h)) if (k.toLowerCase() === 'access-control-allow-origin') delete h[k];
     h['Access-Control-Allow-Origin'] = ['*'];

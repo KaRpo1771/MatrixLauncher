@@ -2186,9 +2186,10 @@ const cfVersionRow = f => ({
 /* Быстрая часть: сведения о моде и первые 50 файлов. Остальные страницы файлов отдаёт cfFiles (грузятся в фоне) */
 async function cfDetails(id) {
   const enc = encodeURIComponent(id);
-  const [mod, first] = await Promise.all([
+  const [mod, first, desc] = await Promise.all([
     cfRequest(`/mods/${enc}`),
-    cfRequest(`/mods/${enc}/files`, { params: { pageSize: 50, index: 0 } })
+    cfRequest(`/mods/${enc}/files`, { params: { pageSize: 50, index: 0 } }),
+    cfRequest(`/mods/${enc}/description`).catch(() => null)   // длинное описание: из него берём картинки и видео, которых нет в галерее
   ]);
   const list = first.data || [];
   const total = Math.min((first.pagination && first.pagination.totalCount) || list.length, 1000);
@@ -2199,6 +2200,7 @@ async function cfDetails(id) {
     loaders: [...new Set((m.latestFilesIndexes || []).map(x => CF_LOADER_NAME[x.modLoader]).filter(Boolean))],
     links: { source: m.links && m.links.sourceUrl, issues: m.links && m.links.issuesUrl, wiki: m.links && m.links.wikiUrl },
     gallery: (m.screenshots || []).map(x => ({ url: x.url, title: x.title || '', desc: x.description || '' })),
+    body: desc && typeof desc.data === 'string' ? desc.data.slice(0, 400000) : '',
     distributable: m.allowModDistribution !== false,
     moreFiles: total > 50, totalFiles: total,
     versions: list.map(cfVersionRow)

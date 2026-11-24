@@ -109,6 +109,7 @@ const Modrinth = {
       gallery:(p.gallery||[]).slice()
         .sort((a,b)=> (b.featured?1:0)-(a.featured?1:0) || (a.ordering||0)-(b.ordering||0))
         .map(g=>({url:g.url, title:g.title||"", desc:g.description||""})),
+      body:typeof p.body === "string" ? p.body.slice(0, 400000) : "",
       followers:p.followers, downloads:p.downloads,
       gameVersions:p.game_versions||[], loaders:(p.loaders||[]).filter(l=> l!=="minecraft" && l!=="datapack"),
       links:{source:p.source_url, issues:p.issues_url, wiki:p.wiki_url},
@@ -681,40 +682,107 @@ function isMostlyCyrillic(s){
 }
 
 /* ---------- Singleton: переводчик с общим кэшем ----------
-   Запросы идут через очередь с ограничением (несколько одновременно): если при быстром листании страниц
-   отправлять по запросу на каждую карточку разом, бесплатный сервис отвечает ошибкой 429 и перестаёт переводить.
-   Задачи для карточек, которых уже нет на экране, пропускаются. Неудачи не запоминаются как «перевод не нужен»:
-   запрос повторяется с паузой, а при полной неудаче следующая попытка будет позже. */
+   Как это работает:
+   • Кэш хранится не только в памяти, но и в localStorage: переведённое один раз больше не запрашивается
+     (после перезапуска лаунчера описания сразу русские, без сотен новых запросов).
+   • Описания с экрана переводятся пачками: до 8 коротких текстов в одном запросе, вместо одного запроса на карточку.
+     Так бесплатный сервис не отвечает 429, как раньше при листании страниц.
+   • Если первый сервис отказал, пробуются запасные (Google Translate из расширения Chrome, затем MyMemory).
+   • Карточки, которые видны на экране, переводятся первыми; ушедшие со страницы пропускаются.
+   • Неудача не запоминается как «перевод не нужен»: для карточки на экране запрос повторяется с нарастающей паузой. */
+function hash53(str){
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for(let i = 0, ch; i < str.length; i++){
+    ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
 class Translator {
   static #instance = null;
   static getInstance(){
     return (Translator.#instance ??= new Translator());
   }
 
-  #cache = new Map();          // удачные переводы
-  #failedAt = new Map();       // ключ -> время последней неудачи (короткая пауза перед новой попыткой)
+  static #STORE = "modmatrix:trcache1";
+  static #MAX_ENTRIES = 3000;
+  static #MAX_CHARS = 1500000;
+  static #BATCH_ITEMS = 8;
+  static #BATCH_CHARS = 1500;
+  static #SINGLE_MAX = 4500;           // текст длиннее режем на части по предложениям
+
+  #cache = new Map();          // ключ -> перевод (удачные, сохраняются на диск)
+  #failedAt = new Map();       // ключ -> время последней неудачи
   #waiting = new Map();        // ключ -> общий промис, чтобы одинаковый текст не уходил дважды
   #queue = [];
   #active = 0;
-  #max = 3;
+  #max = 2;                    // одновременных запросов (каждый несёт до 8 текстов)
   #cooldownUntil = 0;
   #timer = null;
+  #saveTimer = null;
+  #soon = null;
 
   constructor(){
     if(Translator.#instance) throw new Error("Translator, синглтон, используйте Translator.getInstance()");
+    this.#load();
   }
 
-  /* stale: функция «результат уже не нужен» (карточка исчезла), тогда запрос не отправляется */
-  translate(text, lang, stale){
+  #key(text, lang){ return lang + ":" + hash53(text).toString(36) + ":" + text.length; }
+
+  #load(){
+    try{
+      const raw = localStorage.getItem(Translator.#STORE);
+      if(!raw) return;
+      const obj = JSON.parse(raw);
+      for(const [k, v] of Object.entries(obj)) if(typeof v === "string" && v) this.#cache.set(k, v);
+    }catch(e){ /* повреждённый кэш просто не используется */ }
+  }
+  #scheduleSave(){
+    if(this.#saveTimer) return;
+    this.#saveTimer = setTimeout(()=>{
+      this.#saveTimer = null;
+      try{
+        while(this.#cache.size > Translator.#MAX_ENTRIES) this.#cache.delete(this.#cache.keys().next().value);
+        let chars = 0; for(const v of this.#cache.values()) chars += v.length;
+        while(chars > Translator.#MAX_CHARS && this.#cache.size){
+          const k = this.#cache.keys().next().value; chars -= this.#cache.get(k).length; this.#cache.delete(k);
+        }
+        localStorage.setItem(Translator.#STORE, JSON.stringify(Object.fromEntries(this.#cache)));
+      }catch(e){ /* хранилище недоступно или переполнено: работаем только с памятью */ }
+    }, 2000);
+  }
+
+  /* перевод уже есть (или нужно ли пробовать ещё раз): для повторных попыток карточек на экране */
+  failed(text, lang){
+    const key = this.#key(this.#norm(text), lang);
+    return !this.#cache.has(key) && this.#failedAt.has(key);
+  }
+  #norm(text){ return String(text).replace(/\s+/g, " ").trim(); }
+
+  /* stale: функция «результат уже не нужен» (карточка исчезла), тогда запрос не отправляется;
+     node: элемент, куда пойдёт перевод (видимые на экране переводятся первыми) */
+  translate(text, lang, stale, node){
     if(!text || !lang) return Promise.resolve(text);
-    const key = lang + "::" + text;
+    const src = this.#norm(text);
+    if(!src) return Promise.resolve(text);
+    const key = this.#key(src, lang);
     if(this.#cache.has(key)) return Promise.resolve(this.#cache.get(key));
     const failed = this.#failedAt.get(key);
-    if(failed && Date.now() - failed < 15000) return Promise.resolve(text);
+    if(failed && Date.now() - failed < 3000) return Promise.resolve(text);
     return new Promise(resolve => {
-      this.#queue.push({ key, text, lang, stale, resolve });
-      this.#pump();
+      this.#queue.push({ key, text: src, original: text, lang, stale, node, resolve });
+      // карточки страницы создаются подряд: даём им набраться в очередь, чтобы уйти одной пачкой
+      if(!this.#soon) this.#soon = setTimeout(() => { this.#soon = null; this.#pump(); }, 40);
     });
+  }
+
+  #onScreen(node){
+    if(!node || !node.isConnected) return false;
+    const r = node.getBoundingClientRect();
+    return r.bottom > -150 && r.top < innerHeight + 450;
   }
 
   #pump(){
@@ -722,63 +790,173 @@ class Translator {
     const wait = this.#cooldownUntil - Date.now();
     if(wait > 0){ this.#timer = setTimeout(() => this.#pump(), wait + 20); return; }
     while(this.#active < this.#max && this.#queue.length){
-      const job = this.#queue.shift();
-      if(job.stale && job.stale()){ job.resolve(job.text); continue; }   // страницу уже сменили
-      if(this.#cache.has(job.key)){ job.resolve(this.#cache.get(job.key)); continue; }
-      if(this.#waiting.has(job.key)){ this.#waiting.get(job.key).then(job.resolve); continue; }
+      const batch = this.#takeBatch();
+      if(!batch.length) break;
       this.#active++;
-      const run = this.#fetchWithRetry(job).finally(() => { this.#waiting.delete(job.key); this.#active--; this.#pump(); });
-      this.#waiting.set(job.key, run);
-      run.then(job.resolve);
+      this.#translateBatch(batch).catch(()=>{}).finally(() => { this.#active--; this.#pump(); });
     }
   }
 
-  async #fetchWithRetry({ key, text, lang }){
-    for(let attempt = 1; attempt <= 3; attempt++){
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 12000);
-      try{
-        const p = new URLSearchParams({client:"gtx", sl:"auto", tl:lang, dt:"t", q:text});
-        // длинный текст не помещается в адрес запроса, отправляем телом
-        const r = text.length > 1200
-          ? await fetch("https://translate.googleapis.com/translate_a/single", { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:p, signal:ctrl.signal })
-          : await fetch(`https://translate.googleapis.com/translate_a/single?${p}`, { signal:ctrl.signal });
-        if(r.status === 429 || r.status >= 500){
-          this.#cooldownUntil = Date.now() + 1500 * attempt;   // сервис просит притормозить: пауза для всей очереди
-          throw new Error("busy " + r.status);
-        }
-        if(!r.ok) throw new Error("translate failed");
-        const data = await r.json();
-        const translated = (data[0] || []).map(chunk => chunk[0]).join("");
-        const result = translated || text;
-        this.#cache.set(key, result);
-        this.#failedAt.delete(key);
-        return result;
-      }catch(e){
-        if(attempt < 3) await new Promise(res => setTimeout(res, 400 * attempt));
-      }finally{
-        clearTimeout(t);
+  #takeBatch(){
+    // те, что на экране, идут первыми
+    const vis = new Map();
+    for(const j of this.#queue) vis.set(j, this.#onScreen(j.node) ? 1 : 0);
+    this.#queue.sort((a, b) => vis.get(b) - vis.get(a));
+    const batch = [];
+    let size = 0, lang = null;
+    while(this.#queue.length && batch.length < Translator.#BATCH_ITEMS){
+      const job = this.#queue[0];
+      if(job.stale && job.stale()){ this.#queue.shift(); job.resolve(job.original); continue; }   // страницу уже сменили
+      if(this.#cache.has(job.key)){ this.#queue.shift(); job.resolve(this.#cache.get(job.key)); continue; }
+      if(this.#waiting.has(job.key)){ this.#queue.shift(); this.#waiting.get(job.key).then(job.resolve); continue; }
+      if(lang && job.lang !== lang) break;                       // в одном запросе один язык
+      if(job.text.length > 600 && batch.length) break;            // длинные тексты идут отдельным запросом
+      if(batch.length && size + job.text.length > Translator.#BATCH_CHARS) break;
+      this.#queue.shift();
+      lang = job.lang; size += job.text.length;
+      const d = new Promise(r => { job.settle = r; });
+      this.#waiting.set(job.key, d);
+      d.then(job.resolve);
+      batch.push(job);
+      if(job.text.length > 600) break;
+    }
+    return batch;
+  }
+
+  async #translateBatch(batch){
+    const lang = batch[0].lang;
+    let out = null;
+    if(batch.length > 1){
+      const lines = await this.#remote(lang, batch.map(j => j.text).join("\n"));
+      const parts = lines == null ? null : lines.split("\n").map(s => s.trim());
+      // строки должны совпасть по числу и не быть пустыми, иначе пачка могла «съехать»: тогда переводим по одной
+      if(parts && parts.length === batch.length && parts.every(Boolean)) out = parts;
+    }
+    if(!out){
+      out = [];
+      for(const j of batch){
+        out.push(j.stale && j.stale() ? false : await this.#translateLong(lang, j.text));   // false: карточка ушла, ничего не запоминаем
       }
     }
-    this.#failedAt.set(key, Date.now());   // не кэшируем оригинал как перевод: позже попробуем снова
-    return text;
+    batch.forEach((job, i) => {
+      const t = out[i];
+      if(t === false){
+        // пропущено: запрос не отправлялся
+      }else if(t){
+        this.#cache.set(job.key, t);
+        this.#failedAt.delete(job.key);
+      }else{
+        this.#failedAt.set(job.key, Date.now());              // не кэшируем оригинал как перевод
+      }
+      this.#waiting.delete(job.key);
+      job.settle(t || job.original);
+    });
+    this.#scheduleSave();
+  }
+
+  /* длинный текст режется по предложениям на куски, чтобы каждый ушёл целиком */
+  async #translateLong(lang, text){
+    if(text.length <= Translator.#SINGLE_MAX){
+      const r = await this.#remote(lang, text);
+      return r ? r.replace(/\s*\n\s*/g, " ").trim() : null;
+    }
+    const chunks = []; let cur = "";
+    for(const s of text.split(/(?<=[.!?。])\s+/)){
+      if(cur && (cur + " " + s).length > Translator.#SINGLE_MAX){ chunks.push(cur); cur = s; }
+      else cur = cur ? cur + " " + s : s;
+    }
+    if(cur) chunks.push(cur);
+    const done = [];
+    for(const c of chunks.flatMap(c => c.length > Translator.#SINGLE_MAX ? c.match(new RegExp(".{1," + Translator.#SINGLE_MAX + "}", "gs")) : [c])){
+      const r = await this.#remote(lang, c);
+      if(!r) return null;
+      done.push(r.replace(/\s*\n\s*/g, " ").trim());
+    }
+    return done.join(" ");
+  }
+
+  /* перебор сервисов: у каждого свои лимиты, поэтому отказ одного не ломает перевод */
+  async #remote(lang, q){
+    const providers = [Translator.#google, Translator.#chromeExt];
+    if(q.length <= 450 && !q.includes("\n")) providers.push(Translator.#myMemory);
+    for(let round = 1; round <= 2; round++){
+      for(const p of providers){
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 12000);
+        try{
+          const r = await p(lang, q, ctrl.signal);
+          if(r) return r;
+        }catch(e){
+          if(e && e.busy) this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + 1200 * round);   // просят притормозить: пауза для всей очереди
+        }finally{
+          clearTimeout(t);
+        }
+      }
+      await new Promise(res => setTimeout(res, 500 * round));
+    }
+    return null;
+  }
+
+  static async #google(lang, q, signal){
+    const p = new URLSearchParams({client:"gtx", sl:"auto", tl:lang, dt:"t", q});
+    // длинный текст не помещается в адрес запроса, отправляем телом
+    const r = q.length > 900
+      ? await fetch("https://translate.googleapis.com/translate_a/single", { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:p, signal })
+      : await fetch(`https://translate.googleapis.com/translate_a/single?${p}`, { signal });
+    if(r.status === 429 || r.status >= 500){ const e = new Error("busy " + r.status); e.busy = true; throw e; }
+    if(!r.ok) throw new Error("translate failed " + r.status);
+    const data = await r.json();
+    const out = (data[0] || []).map(chunk => (chunk && chunk[0]) || "").join("");
+    return out || null;
+  }
+  static async #chromeExt(lang, q, signal){
+    const p = new URLSearchParams({client:"dict-chrome-ex", sl:"auto", tl:lang, q});
+    const r = await fetch(`https://clients5.google.com/translate_a/t?${p}`, { signal });
+    if(r.status === 429 || r.status >= 500){ const e = new Error("busy " + r.status); e.busy = true; throw e; }
+    if(!r.ok) throw new Error("translate failed " + r.status);
+    const data = await r.json();
+    if(data && Array.isArray(data.sentences)) return data.sentences.map(s => s.trans || "").join("") || null;
+    if(Array.isArray(data)) return data.map(x => Array.isArray(x) ? x[0] : x).filter(x => typeof x === "string").join("\n") || null;
+    return null;
+  }
+  static async #myMemory(lang, q, signal){
+    const p = new URLSearchParams({q, langpair:"Autodetect|" + lang});
+    const r = await fetch(`https://api.mymemory.translated.net/get?${p}`, { signal });
+    if(r.status === 429){ const e = new Error("busy"); e.busy = true; throw e; }
+    if(!r.ok) throw new Error("translate failed " + r.status);
+    const data = await r.json();
+    const t = data && data.responseData && data.responseData.translatedText;
+    if(!t || Number(data.responseStatus) !== 200 || /MYMEMORY WARNING|INVALID/i.test(t)) return null;
+    return t;
   }
 }
-const translateText = (text, lang, stale)=> Translator.getInstance().translate(text, lang, stale);
-let translateQueueN = 0;
+const translateText = (text, lang, stale, node)=> Translator.getInstance().translate(text, lang, stale, node);
+let translateEpoch = 0;   // растёт при каждой новой отрисовке страницы: карточки прошлой отрисовки уже не нужны
+const RETRY_DELAYS = [4000, 8000, 15000, 30000, 60000];   // паузы между повторами для карточки на экране
 function maybeTranslate(node, text){
   const lang = getLang();
   if(!lang || !text || !node) return;
   if(lang === "ru" && isMostlyCyrillic(text)) return;
-  // небольшая отсрочка: карточка к этому времени уже вставлена в страницу
-  setTimeout(()=>{
-    translateText(text, lang, () => !node.isConnected).then(t=>{
-      if(t && t !== text && node.isConnected){
+  // Карточку создают заранее и вставляют в страницу чуть позже, поэтому «не нужна» она только когда
+  // уже не на экране после новой отрисовки страницы или так и не появилась за 15 секунд
+  const born = Date.now(), epoch = translateEpoch;
+  const stale = () => {
+    if(node.isConnected) return false;
+    return epoch !== translateEpoch || Date.now() - born > 15000;   // ушла со страницы (началась новая отрисовка) или так и не появилась
+  };
+  const run = attempt => {
+    translateText(text, lang, stale, node).then(t=>{
+      if(stale()) return;
+      if(t && t !== text){
         node.textContent = t;
         node.classList.add("translated");
+      }else if(Translator.getInstance().failed(text, lang) && attempt < RETRY_DELAYS.length){
+        // сервис не ответил: пока карточка на экране, пробуем снова, с нарастающей паузой
+        setTimeout(()=>{ if(node.isConnected && epoch === translateEpoch) run(attempt + 1); }, RETRY_DELAYS[attempt]);
       }
     });
-  }, 0);
+  };
+  setTimeout(()=> run(0), 0);
 }
 
 /* ============================================================
@@ -825,7 +1003,109 @@ function buildCard(m, onChange){
   el.addEventListener("click", open);
   el.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); }});
   if(m.desc) maybeTranslate(el.querySelector(".card-body p"), m.desc);
+  hydrateCover(m, el);
   return el;
+}
+
+/* ---------- обложки для карточек без официальной галереи ----------
+   У многих проектов нет ни галереи Modrinth, ни скриншотов CurseForge, а картинки лежат только в длинном описании
+   (в окне мода они есть, а в списке карточка без обложки). Когда такая карточка попадает на экран, лаунчер достаёт
+   описание проекта, берёт первую картинку, похожую на скриншот, и ставит её обложкой. Результат запоминается на диске. */
+const CoverFinder = {
+  KEY:"modmatrix:cover1", TTL_FOUND:30*864e5, TTL_NONE:3*864e5, MAX:1500,
+  cache:null, queue:[], active:0, MAXPAR:2, pending:new Map(), saveTimer:null,
+  load(){
+    if(this.cache) return;
+    this.cache = new Map();
+    try{ for(const [k,v] of Object.entries(JSON.parse(localStorage.getItem(this.KEY) || "{}"))) this.cache.set(k, v); }catch(e){}
+  },
+  save(){
+    if(this.saveTimer) return;
+    this.saveTimer = setTimeout(()=>{
+      this.saveTimer = null;
+      try{
+        while(this.cache.size > this.MAX) this.cache.delete(this.cache.keys().next().value);
+        localStorage.setItem(this.KEY, JSON.stringify(Object.fromEntries(this.cache)));
+      }catch(e){}
+    }, 1500);
+  },
+  cached(id){
+    this.load();
+    const e = this.cache.get(id);
+    if(!e) return undefined;
+    if(Date.now() - e[1] > (e[0] ? this.TTL_FOUND : this.TTL_NONE)){ this.cache.delete(id); return undefined; }
+    return e[0];
+  },
+  get(m){
+    const c = this.cached(m.id);
+    if(c !== undefined) return Promise.resolve(c);
+    if(this.pending.has(m.id)) return this.pending.get(m.id);
+    const pr = new Promise(resolve=>{ this.queue.push({m, resolve}); this.pump(); });
+    this.pending.set(m.id, pr);
+    return pr;
+  },
+  pump(){
+    while(this.active < this.MAXPAR && this.queue.length){
+      const job = this.queue.shift();
+      this.active++;
+      this.find(job.m).then(url=>{
+        if(url !== undefined){ this.cache.set(job.m.id, [url || "", Date.now()]); this.save(); }   // undefined: сбой сети, попробуем позже
+        job.resolve(url || "");
+      }).catch(()=> job.resolve("")).finally(()=>{ this.pending.delete(job.m.id); this.active--; this.pump(); });
+    }
+  },
+  async find(m){
+    let gallery = [], body = "";
+    const known = detailsCache.get(m.id);
+    if(known){ gallery = known.gallery || []; body = known.body || ""; }
+    else if(m.source === "modrinth"){
+      const r = await fetch(`${Modrinth.api}/project/${m.slug}`);
+      if(!r.ok) return r.status === 404 ? "" : undefined;
+      const p = await r.json();
+      gallery = (p.gallery || []).map(g=>({url:g.url}));
+      body = typeof p.body === "string" ? p.body.slice(0, 200000) : "";
+    }else if(m.source === "curseforge"){
+      const d = await mmCall("cf:details", m.cfId || String(m.id).split(":")[1]);
+      gallery = d.gallery || []; body = d.body || "";
+    }else return "";
+    if(gallery[0] && gallery[0].url) return gallery[0].url;
+    const imgs = mediaFromBody(body, []).images.slice(0, 8);
+    let fallback = "";
+    for(const g of imgs){
+      const sz = await measureImage(g.url);
+      if(looksLikeScreenshot(sz)) return g.url;
+      if(!fallback && sz && !sz.flat && sz.w >= 300 && sz.h >= 150 && sz.w / sz.h <= 3.2) fallback = g.url;
+    }
+    return fallback;
+  }
+};
+const coverObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(entries=>{
+  for(const e of entries){
+    if(!e.isIntersecting) continue;
+    coverObserver.unobserve(e.target);
+    const fn = e.target._coverJob; e.target._coverJob = null;
+    if(fn) fn();
+  }
+}, {rootMargin:"300px"}) : null;
+function hydrateCover(m, el){
+  if(m.cover || m.kind === "plugin" || !["modrinth","curseforge"].includes(m.source) || !m.id) return;
+  const job = ()=>{
+    CoverFinder.get(m).then(url=>{
+      if(!url || !el.isConnected || el.querySelector(".card-cover")) return;
+      m.cover = url;
+      const box = document.createElement("div");
+      box.className = "card-cover";
+      const img = document.createElement("img");
+      img.alt = ""; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+      img.addEventListener("error", ()=> box.remove());
+      img.src = url;
+      box.appendChild(img);
+      el.insertBefore(box, el.firstChild);
+    });
+  };
+  if(!coverObserver){ job(); return; }
+  el._coverJob = job;
+  coverObserver.observe(el);
 }
 
 /* ---------- фильтры, выбранные в каталоге, применяются внутри карточек ---------- */
@@ -957,7 +1237,7 @@ let modalDetails = null, modalShowAll = false;
 const detailsCache = new Map();
 
 /* ---------- галерея изображений мода/плагина и просмотр во весь экран ---------- */
-let lightbox = null, lbImages = [], lbIndex = 0;
+let lightbox = null, lbImages = [], lbIndex = 0, lbToken = 0;
 function ensureLightbox(){
   if(lightbox) return lightbox;
   lightbox = document.createElement("dialog");
@@ -966,10 +1246,12 @@ function ensureLightbox(){
   lightbox.innerHTML = `
     <button class="lb-btn lb-close" type="button" aria-label="Закрыть">✕</button>
     <button class="lb-btn lb-prev" type="button" aria-label="Предыдущее">‹</button>
-    <figure class="lb-fig"><img class="lb-img" alt=""><figcaption class="lb-cap"></figcaption></figure>
+    <figure class="lb-fig"><img class="lb-img" alt=""><video class="lb-img lb-video" controls hidden></video><div class="lb-embed" hidden></div><figcaption class="lb-cap"></figcaption><button class="btn lb-ext" type="button" hidden>Открыть в браузере ↗</button></figure>
     <button class="lb-btn lb-next" type="button" aria-label="Следующее">›</button>`;
   document.body.appendChild(lightbox);
   lightbox.querySelector(".lb-close").addEventListener("click", ()=> lightbox.close());
+  lightbox.addEventListener("close", ()=>{ const v = lightbox.querySelector(".lb-video"); v.pause(); v.removeAttribute("src"); v.load(); lbClearEmbed(); });
+  lightbox.querySelector(".lb-ext").addEventListener("click", ()=>{ const g = lbImages[lbIndex]; if(g && g.url) window.open(g.url, "_blank", "noopener"); });
   lightbox.querySelector(".lb-prev").addEventListener("click", ()=> lbShow(lbIndex - 1));
   lightbox.querySelector(".lb-next").addEventListener("click", ()=> lbShow(lbIndex + 1));
   lightbox.addEventListener("click", e=>{ if(e.target === lightbox) lightbox.close(); });
@@ -979,14 +1261,58 @@ function ensureLightbox(){
   });
   return lightbox;
 }
+/* ролик встроен в окно просмотра: iframe убираем при переключении и закрытии, чтобы звук не продолжал играть */
+function lbClearEmbed(){
+  lbToken++;
+  if(!lightbox) return;
+  const box = lightbox.querySelector(".lb-embed");
+  const f = box.querySelector("iframe");
+  if(f){ f.src = "about:blank"; f.remove(); }
+  box.hidden = true;
+}
+async function embedSrc(url){
+  try{
+    if(window.mm){
+      const base = await mmCall("embed:base");
+      if(base) return `${base}/player?src=${encodeURIComponent(url)}`;
+    }
+  }catch(e){}
+  return url;
+}
 function lbShow(i){
   if(!lbImages.length) return;
   lbIndex = (i + lbImages.length) % lbImages.length;
   const g = lbImages[lbIndex];
-  const img = lightbox.querySelector(".lb-img");
-  img.referrerPolicy = "no-referrer";
-  img.src = g.url;
-  img.alt = g.title || "";
+  const img = lightbox.querySelector("img.lb-img"), vid = lightbox.querySelector(".lb-video");
+  const box = lightbox.querySelector(".lb-embed"), ext = lightbox.querySelector(".lb-ext");
+  vid.pause();
+  lbClearEmbed();
+  ext.hidden = true;
+  if(g.embed){
+    img.hidden = true; img.removeAttribute("src");
+    vid.hidden = true; vid.removeAttribute("src");
+    const f = document.createElement("iframe");
+    f.title = g.title || "Видео";
+    f.allow = "autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write";
+    f.allowFullscreen = true;
+    f.referrerPolicy = "strict-origin-when-cross-origin";
+    box.appendChild(f);
+    // Плеер открывается через маленькую локальную страницу (http://localhost): у страницы с file:// нет адреса,
+    // и YouTube отвечает чёрным экраном или ошибкой 153. Вне приложения ролик встраивается напрямую.
+    const token = lbToken;
+    embedSrc(g.embed).then(src=>{ if(token === lbToken && f.isConnected) f.src = src; });
+    box.hidden = false;
+    ext.hidden = false;      // запасной путь: если площадка не даёт показать ролик внутри лаунчера
+  }else if(g.video === "file"){
+    img.hidden = true; img.removeAttribute("src");
+    vid.hidden = false; vid.src = g.url;
+  }else{
+    vid.hidden = true; vid.removeAttribute("src");
+    img.hidden = false;
+    img.referrerPolicy = "no-referrer";
+    img.src = g.url;
+    img.alt = g.title || "";
+  }
   lightbox.querySelector(".lb-cap").textContent =
     [g.title, g.desc].filter(Boolean).join(", ") + (lbImages.length > 1 ? `  (${lbIndex+1}/${lbImages.length})` : "");
   const multi = lbImages.length > 1;
@@ -999,29 +1325,264 @@ function openLightbox(images, index){
   lightbox.showModal();
   lbShow(index);
 }
-function renderModalGallery(images){
+/* ---------- картинки и видео из длинного описания проекта ----------
+   Официальная галерея (Modrinth) и скриншоты (CurseForge) есть не у каждого проекта, а авторы часто кладут
+   картинки и ролики прямо в описание (Markdown у Modrinth, HTML у CurseForge). Достаём их оттуда и добавляем в галерею. */
+const MEDIA_SKIP_HOST = /(^|\.)(ytimg\.com|img\.youtube\.com|shields\.io|badgen\.net|bstats\.org|forthebadge\.com|komarev\.com|visitor-badge\.laobi\.icu|hits\.seeyoufarm\.com|star-history\.com|discordapp\.com|discord\.com|bmc\.link|buymeacoffee\.com|ko-fi\.com|patreon\.com|paypal\.com|paypalobjects\.com)$/i;
+const MEDIA_BUTTON_HOST = /(^|\.)(discord\.gg|discord\.com|discordapp\.com|patreon\.com|ko-fi\.com|buymeacoffee\.com|paypal\.com|paypal\.me|boosty\.to|donationalerts\.com|opencollective\.com|liberapay\.com|github\.com|gitlab\.com|twitter\.com|x\.com|facebook\.com|instagram\.com|tiktok\.com|t\.me|telegram\.me|vk\.com|reddit\.com|twitch\.tv|curseforge\.com|modrinth\.com|planetminecraft\.com|bisecthosting\.com|apexminecrafthosting\.com|shockbyte\.com|sparkedhost\.com|nodecraft\.com|ggservers\.com|bloom\.host|crowdin\.com|weblate\.org|curseforge\.overwolf\.com)$/i;
+const MEDIA_SKIP_PATH = /badge|shield|sponsor|donat|patreon|ko-?fi|paypal|buymeacoffee|bmc-|emoji|favicon|spacer|pixel\.gif|widget|logo|icon|banner|divider|separator|avatar|button|mascot|header/i;
+function cleanMediaUrl(u){
+  if(!u) return null;
+  u = String(u).trim().replace(/&amp;/g, "&");
+  if(u.startsWith("//")) u = "https:" + u;
+  if(!/^https?:\/\//i.test(u)) return null;
+  try{ return new URL(u); }catch{ return null; }
+}
+/* ссылки CurseForge вида /linkout?remoteUrl=... (адрес закодирован, иногда дважды) приводим к настоящему адресу */
+function unwrapLinkout(u){
+  for(let i = 0; i < 3 && u && /remoteUrl=/i.test(u.search || ""); i++){
+    let r = u.searchParams.get("remoteUrl");
+    if(!r) break;
+    for(let k = 0; k < 3 && /%[0-9a-f]{2}/i.test(r); k++){ try{ r = decodeURIComponent(r); }catch{ break; } }
+    const n = cleanMediaUrl(r);
+    if(!n) break;
+    u = n;
+  }
+  return u;
+}
+function youtubeId(u){
+  const h = u.hostname.replace(/^www\.|^m\./, "");
+  let id = null;
+  if(h === "youtu.be") id = u.pathname.slice(1).split("/")[0];
+  else if(/^youtube(-nocookie)?\.com$/.test(h)){
+    if(u.pathname === "/watch") id = u.searchParams.get("v");
+    else { const m = /^\/(?:embed|shorts|live|v)\/([\w-]{11})/.exec(u.pathname); if(m) id = m[1]; }
+  }
+  return id && /^[\w-]{11}$/.test(id) ? id : null;
+}
+/* Адрес встроенного плеера для известных площадок (только по проверенным идентификаторам, чужой адрес в iframe не попадёт).
+   Twitch и прочие не встраиваем: они открываются в браузере. */
+function embedFor(u){
+  const yt = youtubeId(u);
+  if(yt) return `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&rel=0&playsinline=1`;
+  const h = u.hostname.replace(/^www\./, "").toLowerCase();
+  let m;
+  if(h === "vimeo.com" || h === "player.vimeo.com"){
+    m = /^\/(?:video\/|channels\/[\w-]+\/|groups\/[\w-]+\/videos\/)?(\d{5,})/.exec(u.pathname);
+    if(m) return `https://player.vimeo.com/video/${m[1]}?autoplay=1`;
+  }
+  if(h === "streamable.com"){
+    m = /^\/(?:e\/|o\/)?([a-z0-9]{4,10})\/?$/i.exec(u.pathname);
+    if(m) return `https://streamable.com/e/${m[1]}?autoplay=1`;
+  }
+  if(h === "dailymotion.com" || h === "dai.ly"){
+    m = h === "dai.ly" ? /^\/([a-z0-9]+)\/?$/i.exec(u.pathname) : /^\/(?:embed\/)?video\/([a-z0-9]+)/i.exec(u.pathname);
+    if(m) return `https://www.dailymotion.com/embed/video/${m[1]}?autoplay=1`;
+  }
+  if(h === "bilibili.com" || h === "m.bilibili.com"){
+    m = /^\/video\/(BV[0-9A-Za-z]{8,12})/.exec(u.pathname);
+    if(m) return `https://player.bilibili.com/player.html?bvid=${m[1]}&autoplay=1&high_quality=1`;
+  }
+  return null;
+}
+function mediaFromBody(body, known){
+  const images = [], videos = [];
+  if(!body) return {images, videos};
+  const seenImg = new Set(known || []), seenVid = new Set();
+  const nameOf = u => decodeURIComponent(u.pathname.split("/").pop() || "").toLowerCase();
+  const addImage = raw => {
+    let u = cleanMediaUrl(raw);
+    if(!u || MEDIA_SKIP_HOST.test(u.hostname) || MEDIA_SKIP_PATH.test(u.pathname)) return;
+    if(/\.(svg|ico)(\?|$)/i.test(u.pathname)) return;           // значки и векторные украшения
+    if(youtubeId(u)) return;
+    const key = u.origin + u.pathname;
+    if(seenImg.has(key) || seenImg.has(nameOf(u))) return;
+    seenImg.add(key); if(nameOf(u)) seenImg.add(nameOf(u));
+    images.push({url:u.href, title:"", desc:""});
+  };
+  const addVideo = raw => {
+    let u = cleanMediaUrl(raw);
+    if(!u) return;
+    u = unwrapLinkout(u);
+    const id = youtubeId(u);
+    if(id){
+      if(seenVid.has(id)) return; seenVid.add(id);
+      videos.push({url:"https://www.youtube.com/watch?v=" + id, thumb:`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, title:"YouTube", desc:"", video:"youtube", embed:embedFor(u)});
+    }else if(/\.(mp4|webm|mov|m4v)$/i.test(u.pathname)){
+      const key = u.origin + u.pathname;
+      if(seenVid.has(key)) return; seenVid.add(key);
+      videos.push({url:u.href, thumb:null, title:nameOf(u), desc:"", video:"file"});
+    }else if(/(^|\.)(vimeo\.com|bilibili\.com|twitch\.tv|streamable\.com|dailymotion\.com)$/i.test(u.hostname) && u.pathname.length > 1){
+      const key = u.origin + u.pathname;
+      if(seenVid.has(key)) return; seenVid.add(key);
+      videos.push({url:u.href, thumb:null, title:u.hostname.replace(/^www\./, ""), desc:"", video:"link", embed:embedFor(u)});
+    }
+  };
+  let m;
+  // Картинка-кнопка: обёрнута в ссылку на соцсеть, донаты, хостинг или другой сайт (Discord, Patreon, GitHub…).
+  // Такие картинки не скриншоты, пропускаем их.
+  const buttons = new Set();
+  const markButton = (img, href) => {
+    const iu = cleanMediaUrl(img); let hu = cleanMediaUrl(href);
+    if(!iu || !hu) return;
+    hu = unwrapLinkout(hu);
+    if(MEDIA_BUTTON_HOST.test(hu.hostname)) buttons.add(iu.origin + iu.pathname);
+  };
+  const mdLinked = /\[\s*!\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)\s*\]\(\s*<?([^)\s>]+)>?[^)]*\)/g;
+  while((m = mdLinked.exec(body))) markButton(m[1], m[2]);
+  const htmlLinked = /<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["'][^>]*>\s*(?:<[^>]+>\s*)*?<img\b[^>]*?\b(?:data-src|src)\s*=\s*["']([^"']+)["']/gi;
+  while((m = htmlLinked.exec(body))) markButton(m[2], m[1]);
+  const origAdd = addImage;
+  const addImageChecked = raw => { const u = cleanMediaUrl(raw); if(u && buttons.has(u.origin + u.pathname)) return; origAdd(raw); };
+  /* Берём только то, что относится к самому проекту: картинки под заголовками про спонсоров, дополнения, другие проекты,
+     ссылки и т.п., а также логотипы, баннеры и значки по подписи (alt) отбрасываем. */
+  const headings = [];
+  const mh = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t#]*$/gm;
+  while((m = mh.exec(body))) headings.push({pos:m.index, text:m[1]});
+  const hh = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi;
+  while((m = hh.exec(body))) headings.push({pos:m.index, text:m[1].replace(/<[^>]+>/g, "")});
+  headings.sort((x, y)=> x.pos - y.pos);
+  const PROMO_HEADING = /sponsor|partner|supporter|patron|donat|support\s+(me|us|the)|hosting|\bhost\b|discord|credits?|thanks|contribut|translat|related|other\s+(mods?|projects?)|(my|our)\s+(other\s+)?(mods?|projects?)|add-?ons?|extensions?|integrations?|compat|dependenc|requirement|changelog|faq|socials?|links|more\s+(mods?|from)|check\s+out|featured|recommended|bisect/i;
+  const PROMO_ALT = /logo|icon|banner|sponsor|partner|supporter|patreon|discord|donat|badge|button|avatar|mascot|divider|separator|emoji|download|support|\bads?\b|header/i;
+  const headingAt = idx=>{ let t = ""; for(const h of headings){ if(h.pos > idx) break; t = h.text; } return t; };
+  const skipCtx = (idx, alt)=> PROMO_ALT.test(alt || "") || PROMO_HEADING.test(headingAt(idx));
+  const md = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  while((m = md.exec(body))) if(!skipCtx(m.index, m[1])) addImageChecked(m[2]);
+  const img = /<img\b[^>]*>/gi;
+  while((m = img.exec(body))){
+    const src = /\b(?:data-src|src)\s*=\s*["']([^"']+)["']/i.exec(m[0]);
+    const alt = /\balt\s*=\s*["']([^"']*)["']/i.exec(m[0]);
+    if(src && !skipCtx(m.index, alt ? alt[1] : "")) addImageChecked(src[1]);
+  }
+  // все остальные адреса в тексте: ролики (YouTube, файлы, Vimeo…) в ссылках, iframe, video и source
+  const any = /(?:https?:)?\/\/[^\s"'<>)\]]+/g;
+  while((m = any.exec(body))){
+    const u = cleanMediaUrl(m[0]);
+    if(u && /linkout/i.test(u.pathname)){ const r = unwrapLinkout(u); if(r !== u) addVideo(r.href); }
+    else addVideo(m[0]);
+  }
+  return {images:images.slice(0, 24), videos:videos.slice(0, 12)};
+}
+
+/* Размер картинки из описания: логотипы, баннеры и значки соцсетей отсеиваем, скриншоты оставляем */
+/* Логотип, значок или рисунок на однотонном фоне: мало цветов, один цвет занимает полкартинки или однотонная рамка.
+   Скриншоты и арты так не выглядят. Нужен CORS (в приложении он включён), иначе оценка по цветам пропускается. */
+function isFlatArt(im){
+  const N = 48, c = document.createElement("canvas");
+  c.width = c.height = N;
+  const x = c.getContext("2d", {willReadFrequently:true});
+  x.drawImage(im, 0, 0, N, N);
+  const d = x.getImageData(0, 0, N, N).data;
+  const all = new Map(), edge = new Map();
+  let edgeN = 0;
+  for(let i = 0; i < N * N; i++){
+    const o = i * 4;
+    const k = d[o + 3] < 128 ? -1 : ((d[o] >> 4) << 8) | ((d[o + 1] >> 4) << 4) | (d[o + 2] >> 4);
+    all.set(k, (all.get(k) || 0) + 1);
+    const r = (i / N) | 0, q = i % N;
+    if(r === 0 || q === 0 || r === N - 1 || q === N - 1){ edge.set(k, (edge.get(k) || 0) + 1); edgeN++; }
+  }
+  const total = N * N;
+  const top = Math.max(...all.values()) / total;
+  const distinct = [...all.values()].filter(v => v / total >= 0.005).length;
+  const edgeTop = Math.max(...edge.values()) / edgeN;
+  return (top > 0.5 && distinct <= 14) || (edgeTop >= 0.9 && top > 0.3 && distinct <= 24);
+}
+function measureImage(url){
+  return new Promise(res=>{
+    let done = false, timer = null;
+    const end = v=>{ if(done) return; done = true; clearTimeout(timer); res(v); };
+    const load = cors=>{
+      const im = new Image();
+      im.referrerPolicy = "no-referrer";
+      if(cors) im.crossOrigin = "anonymous";
+      im.onload = ()=>{
+        const sz = {w:im.naturalWidth, h:im.naturalHeight};
+        if(cors){ try{ sz.flat = isFlatArt(im); }catch(e){} }
+        end(sz);
+      };
+      im.onerror = ()=>{ if(cors && !done) load(false); else end(null); };   // хост не дал CORS: хотя бы размер
+      im.src = url;
+    };
+    timer = setTimeout(()=> end(null), 12000);
+    load(true);
+  });
+}
+function looksLikeScreenshot(sz){
+  if(!sz || !sz.w || !sz.h) return false;
+  if(sz.flat) return false;                                  // логотипы и рисунки на однотонном фоне
+  const {w, h} = sz, r = w / h;
+  if(w < 400 || h < 225) return false;                       // мелочь: значки, смайлы, кнопки
+  if(r > 2.6 || r < 0.5) return false;                       // широкие баннеры и узкие полосы
+  if(r > 0.97 && r < 1.03 && Math.max(w, h) <= 700) return false;   // небольшие квадраты: логотипы и иконки
+  return true;
+}
+
+function renderModalGallery(images, body){
   const box = $("mGallery");
-  if(!box || !images || !images.length) return;
+  if(!box) return;
+  images = (images || []).slice();
+  const known = images.flatMap(g=>{ const u = cleanMediaUrl(g.url); return u ? [u.origin + u.pathname, decodeURIComponent(u.pathname.split("/").pop() || "").toLowerCase()] : []; });
+  const extra = mediaFromBody(body, known);
+  if(!images.length && !extra.images.length && !extra.videos.length) return;
   const wrap = document.createElement("div");
   wrap.className = "gallery";
   const h = document.createElement("h4");
-  h.textContent = `Изображения (${images.length})`;
   const strip = document.createElement("div");
   strip.className = "gallery-strip";
-  images.forEach((g, i)=>{
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "gallery-thumb";
-    b.setAttribute("aria-label", g.title || `Открыть изображение ${i+1}`);
-    const img = document.createElement("img");
-    img.loading = "lazy"; img.referrerPolicy = "no-referrer"; img.alt = g.title || ""; img.src = g.url;
-    // если картинка недоступна (например, хост блокирует показ на чужих сайтах), убираем плашку
-    img.addEventListener("error", ()=>{ b.remove(); if(!strip.children.length) wrap.remove(); });
-    b.appendChild(img);
-    b.addEventListener("click", ()=> openLightbox(images, i));
-    strip.appendChild(b);
-  });
   wrap.append(h, strip);
   box.appendChild(wrap);
+
+  const shown = [];    // всё, что сейчас в ленте, по порядку
+  const refresh = ()=>{
+    const nVid = shown.filter(g=>g.video).length, nImg = shown.length - nVid;
+    h.textContent = nVid ? `Изображения и видео (${nImg} + ${nVid})` : `Изображения (${nImg})`;
+    wrap.hidden = !shown.length;
+  };
+  const addThumb = g=>{
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "gallery-thumb" + (g.video ? " is-video" : "");
+    b.setAttribute("aria-label", g.title || (g.video ? "Открыть видео" : "Открыть изображение"));
+    if(g.thumb || !g.video){
+      const img = document.createElement("img");
+      img.loading = "lazy"; img.referrerPolicy = "no-referrer"; img.alt = g.title || ""; img.src = g.thumb || g.url;
+      // если картинка недоступна (например, хост блокирует показ на чужих сайтах), убираем плашку
+      img.addEventListener("error", ()=>{ b.remove(); const i = shown.indexOf(g); if(i >= 0) shown.splice(i, 1); refresh(); });
+      b.appendChild(img);
+    }else{
+      const ph = document.createElement("span"); ph.className = "gallery-vid-name"; ph.textContent = g.title || "Видео";
+      b.appendChild(ph);
+    }
+    if(g.video){ const pl = document.createElement("span"); pl.className = "gallery-play"; pl.setAttribute("aria-hidden", "true"); pl.textContent = "▶"; b.appendChild(pl); }
+    b.addEventListener("click", ()=>{
+      if(g.video && g.video !== "file" && !g.embed) window.open(g.url, "_blank", "noopener");   // площадка без встроенного плеера: открываем в браузере
+      else {
+        // в окно просмотра идут картинки, видеофайлы и ролики YouTube, Vimeo и других площадок со встроенным плеером
+        const viewable = shown.filter(x=> !x.video || x.video === "file" || x.embed);
+        openLightbox(viewable, viewable.indexOf(g));
+      }
+    });
+    strip.appendChild(b);
+    shown.push(g);
+    refresh();
+  };
+
+  images.forEach(addThumb);                 // официальная галерея: показываем сразу и без отбора
+  extra.videos.forEach(addThumb);
+  refresh();
+
+  // картинки из описания сначала измеряем и добавляем только похожие на скриншоты, в исходном порядке
+  const results = new Array(extra.images.length);
+  let next = 0;
+  const flush = ()=>{
+    while(next < results.length && results[next] !== undefined){
+      if(results[next] && wrap.isConnected) addThumb(results[next]);
+      next++;
+    }
+  };
+  extra.images.forEach((g, i)=>{
+    measureImage(g.url).then(sz=>{ results[i] = looksLikeScreenshot(sz) ? g : null; flush(); });
+  });
 }
 
 function modalGameVersionsHTML(d){
@@ -1136,7 +1697,7 @@ async function openModal(m){
       const vb = $("mVersions"); if(vb) vb.innerHTML = `<p style="color:var(--muted)">Загружаю список версий…</p>`;
       d.versionsPromise.then(()=>{ if(current === m && modalDetails === d) renderModalVersions(); }).catch(()=>{});
     }
-    if(m.kind !== "plugin") renderModalGallery(d.gallery);
+    if(m.kind !== "plugin") renderModalGallery(d.gallery, d.body);
     window.LauncherUI?.decorateModal?.(m);
   }catch(err){
     $("mBody").innerHTML = `<div class="badges">${badgesHTML(m)}</div><p id="mDesc">${m.desc || ""}</p>
@@ -1637,7 +2198,7 @@ function showBanner(html){ const b=$("banner"); if(b){ b.innerHTML = html; b.hid
 function hideBanner(){ const b=$("banner"); if(b) b.hidden = true; }
 
 function renderCatalogGrid(){
-  translateQueueN = 0;
+  translateEpoch++;
   const grid = $("grid");
   if(!grid) return;
   const cfSrc = catalog.src === "curseforge" || !!CATALOG_DEF[catalog.kind].allSources;   // CurseForge и «Общий каталог» фильтруют на сервере
@@ -1693,7 +2254,7 @@ const FEATURES = [
 ];
 
 function renderHome(){
-  translateQueueN = 0;
+  translateEpoch++;
   const content = $("content");
   content.innerHTML = `
     <section class="hero-home">
@@ -1820,7 +2381,7 @@ function compatHTML(issues, o){
 }
 
 function renderFavoritesPage(){
-  translateQueueN = 0;
+  translateEpoch++;
   collections.prune();
   if(favView !== "all" && !collections.get(favView)) favView = "all";
   const content = $("content");

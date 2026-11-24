@@ -393,6 +393,17 @@ code{background:var(--surface-2);border:1px solid var(--line);border-radius:2px;
   background:var(--surface-2);border:2px solid var(--line-hard);border-radius:2px}
 .gallery-thumb:hover{border-color:var(--accent)}
 .gallery-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.gallery-thumb{position:relative}
+.gallery-thumb.is-video{cursor:pointer}
+.gallery-play{position:absolute;inset:0;margin:auto;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;padding-left:3px;font-size:18px;color:#fff;background:rgba(0,0,0,.62);border:1px solid rgba(255,255,255,.55);pointer-events:none}
+.gallery-vid-name{position:absolute;inset:0;display:grid;place-items:center;padding:8px;text-align:center;font-size:12px;color:var(--muted);word-break:break-all}
+.lb-video{background:#000}
+.lb-video[hidden],.lb-img[hidden]{display:none}
+.lb-embed{width:min(100%,calc((100vh - 130px) * 16 / 9));aspect-ratio:16/9;background:#000;border:1px solid var(--line-hard);border-radius:10px;overflow:hidden}
+.lb-embed[hidden]{display:none}
+.lb-embed iframe{width:100%;height:100%;border:0;display:block;background:#000}
+.lb-ext[hidden]{display:none}
+.lb-ext{font-size:13px;padding:6px 14px}
 dialog.lightbox[open]{position:fixed;inset:0;margin:0;width:100vw;height:100vh;max-width:none;max-height:none;padding:16px;
   display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;
   background:rgba(0,0,0,.9);border:none;box-shadow:none;color:var(--text)}
@@ -1724,3 +1735,13 @@ html.has-bg .lc-bg.empty{background:transparent}
 .vm-gv .gv-v:hover{color:var(--accent);text-decoration:underline}
 .vm-gv .gv-v:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .vm-gv .gv-v.on{color:var(--accent);font-weight:600}
+
+/* просмотр изображений: картинка занимает всё окно, а не остаётся в натуральном размере */
+.lb-fig{width:100%}
+.lb-img{width:100%;height:calc(100vh - 100px);max-width:none;max-height:none;object-fit:contain}
+img.lb-img{border:none;background:transparent;border-radius:0}
+.lb-video.lb-img{height:auto;max-height:calc(100vh - 100px);aspect-ratio:16/9}
+@media (max-width:640px){.lb-img{height:calc(100vh - 80px)}}
+
+/* кнопки «назад/вперёд» скрыты, когда файл один: без явной колонки блок уезжал в узкую левую колонку */
+.lb-fig{grid-column:2}
