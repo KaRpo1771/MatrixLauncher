@@ -653,7 +653,7 @@
     "Это действие нельзя отменить.": "This action cannot be undone.",
     "Это не сборка": "This is not a modpack",
     "Это один и тот же файл под разными именами:": "This is the same file under different names:",
-    "авто,": "auto,",
+    "Авто": "Auto",
     "добавлен. Можно закрыть эту вкладку и вернуться в лаунчер.": "added. You can close this tab and return to the launcher.",
     "заявляет, что не работает с «": "states it does not work with \"",
     "мод": "mod",

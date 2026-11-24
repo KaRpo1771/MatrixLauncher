@@ -863,6 +863,8 @@ progress[hidden]{display:none}
 .pg-jump{display:inline-flex;align-items:center;gap:6px;margin-left:12px;font-size:13px;color:var(--muted)}
 .pg-jump input{width:76px;height:40px;padding:0 10px;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line-hard);border-radius:var(--radius)}
 .pg-jump input:focus{outline:none;border-color:var(--accent)}
+.pg-jump input[type=number]{-moz-appearance:textfield;appearance:textfield}
+.pg-jump input::-webkit-outer-spin-button,.pg-jump input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .pg-jump label{display:flex;align-items:center;gap:8px}
 @media (max-width:700px){.pg-jump{width:100%;justify-content:center;margin:8px 0 0}}
 

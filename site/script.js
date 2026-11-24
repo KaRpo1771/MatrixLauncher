@@ -680,53 +680,105 @@ function isMostlyCyrillic(s){
   return cyr / letters.length > 0.5;
 }
 
-/* ---------- Singleton: переводчик с общим кэшем ---------- */
+/* ---------- Singleton: переводчик с общим кэшем ----------
+   Запросы идут через очередь с ограничением (несколько одновременно): если при быстром листании страниц
+   отправлять по запросу на каждую карточку разом, бесплатный сервис отвечает ошибкой 429 и перестаёт переводить.
+   Задачи для карточек, которых уже нет на экране, пропускаются. Неудачи не запоминаются как «перевод не нужен»:
+   запрос повторяется с паузой, а при полной неудаче следующая попытка будет позже. */
 class Translator {
   static #instance = null;
   static getInstance(){
     return (Translator.#instance ??= new Translator());
   }
 
-  #cache = new Map();
+  #cache = new Map();          // удачные переводы
+  #failedAt = new Map();       // ключ -> время последней неудачи (короткая пауза перед новой попыткой)
+  #waiting = new Map();        // ключ -> общий промис, чтобы одинаковый текст не уходил дважды
+  #queue = [];
+  #active = 0;
+  #max = 3;
+  #cooldownUntil = 0;
+  #timer = null;
 
   constructor(){
     if(Translator.#instance) throw new Error("Translator, синглтон, используйте Translator.getInstance()");
   }
 
-  async translate(text, lang){
-    if(!text || !lang) return text;
+  /* stale: функция «результат уже не нужен» (карточка исчезла), тогда запрос не отправляется */
+  translate(text, lang, stale){
+    if(!text || !lang) return Promise.resolve(text);
     const key = lang + "::" + text;
-    if(this.#cache.has(key)) return this.#cache.get(key);
-    try{
-      const p = new URLSearchParams({client:"gtx", sl:"auto", tl:lang, dt:"t", q:text});
-      const r = await fetch(`https://translate.googleapis.com/translate_a/single?${p}`);
-      if(!r.ok) throw new Error("translate failed");
-      const data = await r.json();
-      const translated = (data[0] || []).map(chunk => chunk[0]).join("");
-      const result = translated || text;
-      this.#cache.set(key, result);
-      return result;
-    }catch(e){
-      this.#cache.set(key, text);
-      return text;
+    if(this.#cache.has(key)) return Promise.resolve(this.#cache.get(key));
+    const failed = this.#failedAt.get(key);
+    if(failed && Date.now() - failed < 15000) return Promise.resolve(text);
+    return new Promise(resolve => {
+      this.#queue.push({ key, text, lang, stale, resolve });
+      this.#pump();
+    });
+  }
+
+  #pump(){
+    clearTimeout(this.#timer); this.#timer = null;
+    const wait = this.#cooldownUntil - Date.now();
+    if(wait > 0){ this.#timer = setTimeout(() => this.#pump(), wait + 20); return; }
+    while(this.#active < this.#max && this.#queue.length){
+      const job = this.#queue.shift();
+      if(job.stale && job.stale()){ job.resolve(job.text); continue; }   // страницу уже сменили
+      if(this.#cache.has(job.key)){ job.resolve(this.#cache.get(job.key)); continue; }
+      if(this.#waiting.has(job.key)){ this.#waiting.get(job.key).then(job.resolve); continue; }
+      this.#active++;
+      const run = this.#fetchWithRetry(job).finally(() => { this.#waiting.delete(job.key); this.#active--; this.#pump(); });
+      this.#waiting.set(job.key, run);
+      run.then(job.resolve);
     }
   }
+
+  async #fetchWithRetry({ key, text, lang }){
+    for(let attempt = 1; attempt <= 3; attempt++){
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12000);
+      try{
+        const p = new URLSearchParams({client:"gtx", sl:"auto", tl:lang, dt:"t", q:text});
+        // длинный текст не помещается в адрес запроса, отправляем телом
+        const r = text.length > 1200
+          ? await fetch("https://translate.googleapis.com/translate_a/single", { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:p, signal:ctrl.signal })
+          : await fetch(`https://translate.googleapis.com/translate_a/single?${p}`, { signal:ctrl.signal });
+        if(r.status === 429 || r.status >= 500){
+          this.#cooldownUntil = Date.now() + 1500 * attempt;   // сервис просит притормозить: пауза для всей очереди
+          throw new Error("busy " + r.status);
+        }
+        if(!r.ok) throw new Error("translate failed");
+        const data = await r.json();
+        const translated = (data[0] || []).map(chunk => chunk[0]).join("");
+        const result = translated || text;
+        this.#cache.set(key, result);
+        this.#failedAt.delete(key);
+        return result;
+      }catch(e){
+        if(attempt < 3) await new Promise(res => setTimeout(res, 400 * attempt));
+      }finally{
+        clearTimeout(t);
+      }
+    }
+    this.#failedAt.set(key, Date.now());   // не кэшируем оригинал как перевод: позже попробуем снова
+    return text;
+  }
 }
-const translateText = (text, lang)=> Translator.getInstance().translate(text, lang);
+const translateText = (text, lang, stale)=> Translator.getInstance().translate(text, lang, stale);
 let translateQueueN = 0;
 function maybeTranslate(node, text){
   const lang = getLang();
-  if(!lang || !text) return;
+  if(!lang || !text || !node) return;
   if(lang === "ru" && isMostlyCyrillic(text)) return;
-  const delay = Math.min(translateQueueN++ * 70, 1400);
+  // небольшая отсрочка: карточка к этому времени уже вставлена в страницу
   setTimeout(()=>{
-    translateText(text, lang).then(t=>{
+    translateText(text, lang, () => !node.isConnected).then(t=>{
       if(t && t !== text && node.isConnected){
         node.textContent = t;
         node.classList.add("translated");
       }
     });
-  }, delay);
+  }, 0);
 }
 
 /* ============================================================

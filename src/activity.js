@@ -106,7 +106,8 @@ function sky(w, lang) {
   const parts = [];
   if (w.dayTime != null) { const t = ((w.dayTime % 24000) + 24000) % 24000; parts.push(t >= 13000 && t < 23000 ? T.night : T.day); }
   if (w.thundering) parts.push(T.thunder); else if (w.raining) parts.push(T.rain);
-  return parts.join(', ');
+  const out = parts.join(', ');
+  return out.charAt(0).toUpperCase() + out.slice(1);   // элементы статуса разделены « · », каждый начинается с заглавной
 }
 
 /* Событие (смерть, достижение) в тексте нужного языка */

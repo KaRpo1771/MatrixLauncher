@@ -123,6 +123,90 @@ async function isCached(dest, { sha1, size } = {}) {
   return !!size && st.size === size;
 }
 
+/* ---------- переиспользование одинаковых файлов по SHA-1 ----------
+   Один и тот же файл (например, библиотека или файл Java) часто нужен нескольким версиям или рантаймам под разными путями.
+   Индекс «контрольная сумма → где такой файл уже лежит» хранится в sha1-index.json. Перед скачиванием лаунчер смотрит в него
+   и, если нужный файл уже есть на диске, создаёт ссылку (или копию), а не качает заново. */
+let sha1Index = null, sha1Dirty = false, sha1Timer = null;
+function sha1IndexFile() { return path.join(DIRS.root, 'sha1-index.json'); }
+function loadSha1Index() {
+  if (sha1Index) return sha1Index;
+  sha1Index = { files: new Map(), seeded: new Set() };
+  try {
+    const j = JSON.parse(fs.readFileSync(sha1IndexFile(), 'utf8'));
+    for (const [h, rel] of Object.entries(j.files || {})) sha1Index.files.set(h, rel);
+    for (const d of j.seeded || []) sha1Index.seeded.add(d);
+  } catch { /* индекса ещё нет */ }
+  return sha1Index;
+}
+function saveSha1IndexSoon() {
+  sha1Dirty = true;
+  if (sha1Timer) return;
+  sha1Timer = setTimeout(flushSha1Index, 2000);
+  if (sha1Timer.unref) sha1Timer.unref();
+}
+function flushSha1Index() {
+  clearTimeout(sha1Timer); sha1Timer = null;
+  if (!sha1Dirty || !sha1Index) return;
+  sha1Dirty = false;
+  try {
+    const out = { files: Object.fromEntries(sha1Index.files), seeded: [...sha1Index.seeded] };
+    const tmp = sha1IndexFile() + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(out));
+    fs.renameSync(tmp, sha1IndexFile());
+  } catch { /* индекс только ускоряет работу: не получилось сохранить, соберём заново */ }
+}
+function rememberSha1(sha1, file) {
+  if (!sha1 || !DIRS.root) return;
+  const rel = path.relative(DIRS.root, file);
+  if (rel.startsWith('..') || path.isAbsolute(rel) || rel.endsWith('.part')) return;
+  const idx = loadSha1Index();
+  if (idx.files.get(sha1) === rel) return;
+  // если прежний файл ещё цел, оставляем его: ссылка на него надёжнее нового пути
+  const old = idx.files.get(sha1);
+  if (old && fs.existsSync(path.join(DIRS.root, old))) return;
+  idx.files.set(sha1, rel);
+  saveSha1IndexSoon();
+}
+/* Положить в dest файл с такой же суммой, если он уже есть где-то в папке лаунчера. true, если получилось. */
+async function reuseLocal(dest, sha1) {
+  if (!sha1 || !DIRS.root) return false;
+  const rel = loadSha1Index().files.get(sha1);
+  if (!rel) return false;
+  const src = path.join(DIRS.root, rel);
+  if (path.resolve(src) === path.resolve(dest)) return false;
+  try {
+    if ((await sha1File(src)) !== sha1) { sha1Index.files.delete(sha1); saveSha1IndexSoon(); return false; }   // файл изменили или удалили
+    await fsp.mkdir(path.dirname(dest), { recursive: true });
+    const tmp = dest + '.reuse';
+    await fsp.rm(tmp, { force: true });
+    try { await fsp.link(src, tmp); } catch { await fsp.copyFile(src, tmp); }   // жёсткая ссылка не поддерживается (другой диск, FAT): копируем
+    await fsp.rename(tmp, dest);
+    return true;
+  } catch { return false; }
+}
+/* Один раз проиндексировать уже скачанные файлы в папке (например, другой рантайм Java), чтобы их можно было переиспользовать */
+async function seedSha1Dir(dir) {
+  const idx = loadSha1Index();
+  const key = path.relative(DIRS.root, dir);
+  if (idx.seeded.has(key)) return;
+  const files = [];
+  (function walk(d) {
+    let ents = []; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.isFile() && !/\.(part|reuse|ok)$/.test(e.name)) files.push(f);
+    }
+  })(dir);
+  const known = new Set([...idx.files.values()].map(r => path.join(DIRS.root, r)));
+  await pool(files.filter(f => !known.has(f)), 8, async f => {
+    try { rememberSha1(await sha1File(f), f); } catch { /* файл исчез */ }
+  });
+  // папку помечаем проиндексированной только если рантайм скачан целиком, иначе проверим её в следующий раз
+  if (fs.existsSync(path.join(dir, '.ok'))) { idx.seeded.add(key); saveSha1IndexSoon(); }
+}
+
 /* Скачивание с докачкой (Range) и сторожем: если 30 секунд нет данных, обрыв и повтор с того же места.
    Возвращает 'cached', если файл уже был, иначе 'downloaded'. */
 async function download(url, dest, o = {}) {
@@ -130,8 +214,10 @@ async function download(url, dest, o = {}) {
   if (!url) return 'skipped';
   if (fs.existsSync(dest)) {
     if (o.skipIfExists) return 'cached';
-    if (await isCached(dest, o)) return 'cached';
+    if (await isCached(dest, o)) { rememberSha1(o.sha1, dest); return 'cached'; }
   }
+  // такой же файл уже скачан для другой версии или Java: берём его, а не качаем заново
+  if (o.sha1 && await reuseLocal(dest, o.sha1)) return 'reused';
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   const tmp = dest + '.part';
   const job = jobs.getStore();
@@ -169,6 +255,7 @@ async function download(url, dest, o = {}) {
         throw new Error(`Контрольная сумма не совпала: ${url}`);
       }
       await fsp.rename(tmp, dest);
+      rememberSha1(o.sha1, dest);
       return 'downloaded';
     } catch (e) {
       clearTimeout(timer);
@@ -359,6 +446,7 @@ async function ensureJava(v, rep) {
   if (!arr || !arr.length) throw new Error(`Java (${comp}) недоступна для ${javaKey()}`);
   const manifest = await fetchJson(arr[0].manifest.url);
   const files = Object.entries(manifest.files).filter(([, f]) => f.type === 'file');
+  await seedOtherJava(comp, rep);
   let done = 0;
   await pool(files, 12, async ([name, f]) => {
     const dest = path.join(DIRS.runtime, comp, name);
@@ -368,12 +456,21 @@ async function ensureJava(v, rep) {
     if (done % 20 === 0 || done === files.length) rep(done / files.length, `Java ${comp}: ${done}/${files.length}`);
   });
   await fsp.writeFile(ok, javaMarker(arr[0].version && arr[0].version.name));
+  flushSha1Index();
   return exe;
 }
 
 /* Метка «Java скачана полностью» (.ok) хранит имя сборки Mojang (например 8u51-cacert462b08).
    Сравнивать нужно именно его: версия в файле release внутри Java (1.8.0_51) записывается в другом виде
    и никогда не совпадёт с именем сборки в списке Mojang. */
+/* Другие уже скачанные рантаймы Java (у разных версий игры они сильно пересекаются): индексируем, чтобы не качать те же файлы снова */
+async function seedOtherJava(comp, rep) {
+  for (const other of javaInstalledComps()) {
+    if (other === comp) continue;
+    if (rep && !loadSha1Index().seeded.has(path.relative(DIRS.root, path.join(DIRS.runtime, other)))) rep(0, `Java: ищу уже скачанные файлы (${other})`);
+    await seedSha1Dir(path.join(DIRS.runtime, other));
+  }
+}
 function javaMarker(name) { return JSON.stringify({ name: String(name || ''), date: new Date().toISOString() }); }
 function javaBuildName(comp) {
   try { const m = JSON.parse(fs.readFileSync(path.join(DIRS.runtime, comp, '.ok'), 'utf8')); return m && m.name ? String(m.name) : ''; }
@@ -492,6 +589,7 @@ async function javaInstall(comps, report) {
     const files = Object.entries(manifest.files).filter(([, f]) => f.type === 'file');
     const ok = path.join(DIRS.runtime, comp, '.ok');
     await fsp.rm(ok, { force: true });          // пока идёт скачивание, Java считается неполной
+    await seedOtherJava(comp);
     let done = 0;
     await pool(files, 12, async ([name, f]) => {
       const dest = path.join(DIRS.runtime, comp, name);
@@ -536,13 +634,14 @@ async function ensureGame(versionId, report, { verify = true } = {}) {
   const index = JSON.parse(await fsp.readFile(idxFile, 'utf8'));
   const objs = Object.entries(index.objects || {});
   done = 0;
-  await pool(objs, 16, async ([, o]) => {
+  await pool(objs, 32, async ([, o]) => {
     const h = o.hash, sub = h.slice(0, 2);
     await download(URLS.assets + sub + '/' + h, path.join(DIRS.assets, 'objects', sub, h), { skipIfExists: true });
     done++;
     if (done % 100 === 0 || done === objs.length) rAss(done / objs.length, `Ресурсы: ${done}/${objs.length}`);
   });
 
+  flushSha1Index();
   return { v, javaExe, libs, jar, index };
 }
 
@@ -837,11 +936,27 @@ async function changeLoader(id, { loader, loaderVersion: wanted }, report, onLog
 }
 
 async function deleteInstance(id) {
-  getInstance(id);
+  // записи может уже не быть (остался хвост от неудачного удаления): тогда просто дочищаем папку
+  const known = loadInstances().some(i => i.id === id);
+  if (known && running.has(id)) throw new Error('Сначала закройте игру');
+  if (typeof id !== 'string' || !id || id !== path.basename(id)) throw new Error('Установка не найдена');
+  if (!known && !fs.existsSync(instDir(id))) throw new Error('Установка не найдена');
+  // слежение за папкой держит её открытой (в Windows из-за этого удаление падает): закрываем до удаления
+  const w = watchers.get(id);
+  if (w) { try { w.close(); } catch { /* уже закрыт */ } watchers.delete(id); }
+  for (const kind of ['mods', 'screens']) { clearTimeout(watchTimers.get(id + ':' + kind)); watchTimers.delete(id + ':' + kind); }
+  await unlinkSaves(instDir(id));   // общие миры не должны удалиться вместе с экземпляром
+  try {
+    // повторы нужны, когда файл ещё на секунду занят (антивирус, индексация, только что закрытая игра)
+    await fsp.rm(instDir(id), { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  } catch (e) {
+    syncWatchers();   // запись осталась, возвращаем слежение
+    throw new Error('Не удалось удалить папку установки: ' + (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES' ? 'файлы заняты другой программой. Закройте её и повторите' : e.message));
+  }
+  if (fs.existsSync(instDir(id))) { syncWatchers(); throw new Error('Не удалось полностью удалить папку установки. Повторите попытку'); }
+  // запись убираем только когда папки уже нет: иначе в списке пропадёт то, что осталось на диске
   saveInstances(loadInstances().filter(i => i.id !== id));
   syncWatchers();
-  await unlinkSaves(instDir(id));   // общие миры не должны удалиться вместе с экземпляром
-  await fsp.rm(instDir(id), { recursive: true, force: true });
 }
 
 /* ---------- общие миры ----------

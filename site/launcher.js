@@ -456,7 +456,7 @@
   }
   function metaText(inst) {
     if (!inst) return '';
-    const ram = inst.ramAuto ? `авто, ${gb(inst.ramEffective)} ГБ` : `${gb(inst.ram)} ГБ`;
+    const ram = inst.ramAuto ? `Авто ${gb(inst.ramEffective)} ГБ` : `${gb(inst.ram)} ГБ`;
     const chip = (t, c) => `<span class="meta-chip${c ? ' ' + c : ''}">${t}</span>`;
     return chip(`Minecraft ${esc(inst.mc)}`)
       + chip(`${esc(LD[inst.loader] || inst.loader)}${inst.loaderVersion ? ' ' + esc(inst.loaderVersion) : ''}`)
@@ -1756,9 +1756,9 @@
       } else if (act === 'del') {
         const di = S.instances.find(x => x.id === id);
         if (!(await ask({ title: 'Удалить экземпляр?', text: `«${di ? di.name : id}» будет удалён вместе с модами, мирами и скриншотами.\nЭто действие нельзя отменить.`, ok: 'Удалить', danger: true }))) return;
-        await call('inst:delete', id);
-        await reloadInstances(); S.shotsLoaded = false;
-        $id('lcDlg').close(); render(); note('Установка удалена');
+        try { await call('inst:delete', id); }
+        finally { await reloadInstances(); S.shotsLoaded = false; render(); }   // список обновляем и при ошибке, чтобы он не расходился с диском
+        $id('lcDlg').close(); note('Установка удалена');
       }
     } catch (err) { note(err.message); }
   }

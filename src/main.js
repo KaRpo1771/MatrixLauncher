@@ -48,7 +48,7 @@ const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: '
    Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
 const PRES = {
   ru: {
-    pages: { home: 'Главная страница', mods: 'Смотрит моды', plugins: 'Смотрит плагины', modpacks: 'Смотрит сборки', resourcepacks: 'Смотрит ресурспаки', shaders: 'Смотрит шейдеры', favorites: 'Смотрит избранное', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
+    pages: { home: 'Главная', mods: 'Смотрит моды', plugins: 'Смотрит плагины', modpacks: 'Смотрит сборки', resourcepacks: 'Смотрит ресурспаки', shaders: 'Смотрит шейдеры', favorites: 'Смотрит избранное', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
     viewing: { mod: 'Смотрит мод', plugin: 'Смотрит плагин', modpack: 'Смотрит сборку', resourcepack: 'Смотрит ресурспак', shader: 'Смотрит шейдер' }, author: a => `Автор: ${a}`,
     tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
     inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
