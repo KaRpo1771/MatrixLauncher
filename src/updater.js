@@ -40,7 +40,7 @@ function isNewer(a, b) {   // a новее b?
 }
 
 let hooks = { current: () => '0.0.0', emit: () => {}, canRestart: () => null, quit: () => {}, dataDir: '' };
-const st = { phase: 'idle', current: '', latest: '', notes: '', url: '', canInstall: false, pct: 0, error: '' };
+const st = { phase: 'idle', current: '', latest: '', notes: '', url: '', canInstall: false, manual: false, pct: 0, error: '' };
 let asset = null, busy = false, abortCtl = null, failedFor = '', failedWhy = '';
 
 function set(patch) { Object.assign(st, patch); hooks.emit({ ...st }); }
@@ -71,12 +71,18 @@ async function check({ silent = false } = {}) {
     const portable = !!process.env.PORTABLE_EXECUTABLE_FILE;
     asset = (rel.assets || []).find(a => /^MatrixL-Setup-.*\.exe$/i.test(a.name)) || null;
     if (!isNewer(latest, current)) { set({ phase: 'uptodate', latest, notes: '', url: rel.html_url || '', canInstall: false }); return view(); }
-    // прошлая попытка поставить эту версию не удалась: тихую установку не повторяем, предлагаем скачать вручную
-    const failed = failedFor && failedFor === latest;
+    // в релизе лежит установщик другой версии (забыли поднять version в package.json перед сборкой):
+    // он «установится», но версия не вырастет, и лаунчер решит, что обновление не удалось
+    const av = asset && parseVer(asset.name), lv = parseVer(latest);
+    const mismatch = !!(av && lv && av.join('.') !== lv.join('.') && !isNewer(av.join('.'), current));
+    // прошлая попытка тихой установки не удалась: повторяем уже с обычным окном установщика, в нём видно причину и работает запрос прав
+    const failed = !!(failedFor && failedFor === latest);
     set({
       phase: 'available', latest, url: rel.html_url || '', notes: String(rel.body || '').slice(0, 2000),
-      canInstall: process.platform === 'win32' && !portable && !!asset && !failed,
-      error: failed ? 'Установка не удалась, скачайте новую версию вручную.' + (failedWhy ? ' Журнал: ' + failedWhy : '') + ' (файл update.log)' : ''
+      canInstall: process.platform === 'win32' && !portable && !!asset && !mismatch,
+      manual: failed,
+      error: mismatch ? `В релизе v${latest} лежит установщик ${asset.name} другой версии, автообновление невозможно. Скачайте вручную со страницы релиза.`
+        : failed ? 'Тихая установка не удалась' + (failedWhy ? ' (' + failedWhy + ')' : '') + '. Нажмите «Повторить»: откроется обычное окно установщика.' : ''
     });
   } catch (e) {
     if (silent) set({ phase: 'idle', error: '' }); else set({ phase: 'error', error: e.message });
@@ -126,7 +132,7 @@ const logFile = () => hooks.dataDir ? path.join(hooks.dataDir, 'update.log') : p
    тихо заменяет файлы и запускает новую версию. Короткая цепочка cmd.exe только пишет код завершения в update.log
    и открывает лаунчер ещё раз (второй экземпляр сразу закроется, если новая версия уже запущена установщиком),
    так что при любом исходе лаунчер не остаётся закрытым. */
-function launchInstaller(dir, file, target) {
+function launchInstaller(dir, file, target, visible) {
   const log = logFile();
   const note = m => { try { fs.appendFileSync(log, `${new Date().toISOString()} ${m}\n`, 'utf8'); } catch { /* не критично */ } };
   fs.writeFileSync(log, `${new Date().toISOString()} update ${hooks.current()} -> ${target}\n`, 'utf8');
@@ -135,14 +141,19 @@ function launchInstaller(dir, file, target) {
   let size = -1; try { size = fs.statSync(file).size; } catch { /* нет файла */ }
   note(`exe ${exe}, installer ${file} (${size} bytes), install dir ${installDir}`);
   const q = x => `"${x}"`;
-  const iargs = ['--updated', '/S', '--force-run', `/D=${installDir}`].join(' ');
+  // тихий режим: «/D=» должен идти последним и без кавычек. Обычный режим (после неудачи): без /S и /D, окно установщика видно
+  const iargs = visible ? '--updated --force-run' : ['--updated', '/S', '--force-run', `/D=${installDir}`].join(' ');
+  note(visible ? 'mode: visible installer window' : 'mode: silent');
   // «!» и «%» в путях ломают отложенное раскрытие переменных cmd, тогда код завершения не пишем
   const canLog = ![file, exe, log].some(x => /[!%^]/.test(x));
+  // «&» сразу после аргументов, без пробела: иначе пробел попадает в конец пути «/D=» (у NSIS это часть пути).
+  // Пауза в пару секунд даёт старому лаунчеру и его процессам полностью закрыться до запуска установщика.
   const chain = [
+    `ping -n 3 127.0.0.1 >nul`,
     `start "" /wait ${q(file)} ${iargs}`,
     canLog ? `echo %date% %time% installer exit code: !errorlevel!>>${q(log)}` : '',
     `start "" ${q(exe)}`
-  ].filter(Boolean).join(' & ');
+  ].filter(Boolean).join('&');
   const direct = () => {
     try { const c = spawn(file, ['--updated', '--force-run'], { detached: true, stdio: 'ignore' }); c.on('error', () => {}); c.unref(); } catch (e2) { note('installer failed: ' + e2.message); }
   };
@@ -172,7 +183,17 @@ function checkPending() {
     failedFor = String(p.target);
     try {
       const lines = fs.readFileSync(logFile(), 'utf8').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-      failedWhy = (lines[lines.length - 1] || '').replace(/^\d{4}-\d\d-\d\dT[\d:.Z-]+\s*/, '').slice(0, 160);
+      const m = lines.map(x => x.match(/installer exit code:\s*(\d+)/i)).filter(Boolean).pop();
+      if (m) {
+        const code = +m[1];
+        failedWhy = 'код установщика ' + code + ({
+          0: ': установщик завершился без ошибки, но версия не поменялась; возможно, в релизе старая сборка',
+          1: ': установка отменена или прервана',
+          2: ': установщик остановился, например не смог закрыть или удалить старую версию'
+        }[code] || '');
+      } else {
+        failedWhy = (lines[lines.length - 1] || '').replace(/^\d{4}-\d\d-\d\dT[\d:.Z-]+\s*/, '').slice(0, 160);
+      }
     } catch { failedWhy = ''; }
   }
   else { try { fs.rmSync(logFile(), { force: true }); } catch { /* не критично */ } }
@@ -196,7 +217,7 @@ async function install() {
     await download(asset, file, abortCtl.signal);
     if (abortCtl.signal.aborted) { const e = new Error('Загрузка отменена'); e.cancelled = true; throw e; }
     set({ phase: 'installing', pct: 100 });
-    await launchInstaller(dir, file, st.latest);
+    await launchInstaller(dir, file, st.latest, !!st.manual);
     setTimeout(() => hooks.quit(), 800);
   } catch (e) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* не критично */ }

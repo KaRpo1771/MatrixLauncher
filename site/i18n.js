@@ -60,7 +60,7 @@
     'Применить загрузчик': 'Apply loader', 'Папка игры': 'Game folder', 'Папка модов': 'Mods folder', 'Папка скриншотов': 'Screenshots folder',
     'Фон главной страницы': 'Home page background', 'Своё изображение': 'Custom image', 'Добавить изображение…': 'Add image…', 'Убрать изображение': 'Remove image', 'Без изображения (цвет темы)': 'No image (theme color)',
     'Смена скриншотов': 'Screenshot rotation', 'Скриншоты этого экземпляра': 'This instance screenshots',
-    'Скриншоты берутся только из папки этого экземпляра. Снимки из других установок на фон не попадут.': 'Screenshots are taken only from this instance folder. Shots from other installations will not be used as background.',
+    'Скриншоты берутся только из папки этого экземпляра': 'Screenshots are taken only from this instance folder', 'Изображение MatrixL': 'MatrixL image',
     'Моды в этой установке': 'Mods in this installation', 'Проверить совместимость': 'Check compatibility', 'Проверка совместимости': 'Compatibility check',
     'Конфликтов не найдено': 'No conflicts found', 'Проверяю файлы в папке mods…': 'Checking files in the mods folder…', 'В папке mods пока нет файлов, проверять нечего.': 'The mods folder has no files yet, nothing to check.',
     'Модов пока нет.': 'No mods yet.', 'Технические детали': 'Technical details', 'Журнал': 'Log',
@@ -452,6 +452,8 @@
     "последняя": "latest",
     "потоков:": "threads:",
     "предварительная": "preview",
+    "Предварительная": "Preview",
+    "Установлена": "Installed",
     "предупреждений:": "warnings:",
     "предупреждений": "warnings",
     "проект": "project",
@@ -915,6 +917,21 @@
     "Выйти": "Sign out"
   });
 
+  /* Датапаки */
+  Object.assign(D, {
+    "Датапаки": "Data packs",
+    "Датапак": "Data pack",
+    "Тип": "Type",
+    "Новые механики, крафты и структуры без модов": "New mechanics, recipes and structures without mods",
+    "Датапаки с Modrinth и CurseForge в одном списке. Скачиваются в отдельную папку datapacks выбранного экземпляра, кнопка с папкой открывает её": "Data packs from Modrinth and CurseForge in one list. They are downloaded into a separate datapacks folder of the selected instance; the folder button opens it",
+    "Открыть папку датапаков экземпляра": "Open the instance's data packs folder",
+    "Этот датапак собран для Minecraft": "This data pack was built for Minecraft",
+    "Игра сама не читает эту папку. Обычный датапак нужно скопировать в saves/<мир>/datapacks, но не все паки ставятся туда: некоторые требуют свою папку (например, паки для TACZ кладут в папку tacz установки). Смотрите описание пака. Кнопка с папкой на странице «Датапаки» открывает папку datapacks установки.": "The game does not read this folder by itself. A regular data pack must be copied to saves/<world>/datapacks, but not all packs go there: some require their own folder (for example, TACZ packs go into the installation's tacz folder). Check the pack's description. The folder button on the \"Data packs\" page opens the installation's datapacks folder.",
+    "Нет ни одной установки, сначала создайте её на главной": "No installations yet, create one on the home page first",
+    "Открыта папка": "Opened folder",
+    "Смотрит датапаки": "Browsing data packs"
+  });
+
   /* Ресурспаки и шейдеры */
   Object.assign(D, {
     "Ресурспаки": "Resource packs",
@@ -991,6 +1008,10 @@
     "Старый файл заменяется только после успешной загрузки нового.": "The old file is replaced only after the new one has downloaded successfully.",
     "Обновить выбранные": "Update selected",
     "Обновить все": "Update all",
+    "Скрыть": "Hide",
+    "Скрыть список обновлений": "Hide the update list",
+    "Список обновлений скрыт": "The update list is hidden",
+    "Показать": "Show",
     "Не обновились:": "Failed to update:",
     "Все моды актуальны для": "All mods are up to date for",
     "Найдено в каталогах Modrinth и CurseForge:": "Found in the Modrinth and CurseForge catalogs:",

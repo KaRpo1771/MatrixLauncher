@@ -9,8 +9,10 @@ const LOADER_IDS = ["fabric","forge","neoforge","quilt"];
 const LOADER_LABEL = {fabric:"Fabric",forge:"Forge",neoforge:"NeoForge",quilt:"Quilt", iris:"Iris",oculus:"Oculus",optifine:"OptiFine",canvas:"Canvas",vanilla:"Vanilla"};
 /* у шейдеров вместо загрузчика модов, движок, который их запускает */
 const SHADER_ENGINES = ["iris","oculus","optifine","canvas","vanilla"];
-const RES_KINDS = ["resourcepack","shader"];
+const RES_KINDS = ["resourcepack","shader","datapack"];
 /* значок загрузчика (файлы лежат в site/loaders/<id>.png); если файла нет, просто пропадает */
+/* Oculus (порт Iris для Forge) запускает те же шейдеры, что и Iris, но у Modrinth такого движка в метках нет: добавляем его к шейдерам с Iris */
+const withOculus = (list, isShader)=> isShader && list.includes("iris") && !list.includes("oculus") ? [...list, "oculus"] : list;
 const ICON_IDS = [...LOADER_IDS, "iris","oculus","optifine","canvas"];
 const ldIcon = l => ICON_IDS.includes(l) ? `<img class="ld-ico" src="loaders/${l}.png" alt="" width="14" height="14" onerror="this.remove()">` : "";
 const CAT_LABEL = {
@@ -79,11 +81,11 @@ const Modrinth = {
       items: data.hits.map(h=>({
         id:`modrinth:${h.project_id}`, slug:h.slug, title:h.title, author:h.author,
         desc:h.description, icon:h.icon_url, cover:h.featured_gallery || (h.gallery||[])[0] || null, downloads:h.downloads, follows:h.follows,
-        categories:(h.display_categories||h.categories||[]).filter(c=>!LOADER_IDS.includes(c) && !SHADER_ENGINES.includes(c) && c !== "minecraft"),
+        categories:(h.display_categories||h.categories||[]).filter(c=>!LOADER_IDS.includes(c) && !SHADER_ENGINES.includes(c) && c !== "minecraft" && c !== "datapack"),
         // у шейдеров в «загрузчиках» показываем движок (Iris, OptiFine…); у ресурспаков загрузчика нет
-        loaders:(h.categories||[]).filter(c=> ptype==="shader" ? SHADER_ENGINES.includes(c) : LOADER_IDS.includes(c)),
+        loaders:withOculus((h.categories||[]).filter(c=> ptype==="shader" ? SHADER_ENGINES.includes(c) : LOADER_IDS.includes(c)), ptype==="shader"),
         versions:h.versions||[], updated:h.date_modified,
-        url:`https://modrinth.com/${["modpack","resourcepack","shader"].includes(ptype) ? ptype : "mod"}/${h.slug}`,
+        url:`https://modrinth.com/${["modpack","resourcepack","shader","datapack"].includes(ptype) ? ptype : "mod"}/${h.slug}`,
         source:"modrinth"
       }))
     };
@@ -111,7 +113,7 @@ const Modrinth = {
         .map(g=>({url:g.url, title:g.title||"", desc:g.description||""})),
       body:typeof p.body === "string" ? p.body.slice(0, 400000) : "",
       followers:p.followers, downloads:p.downloads,
-      gameVersions:p.game_versions||[], loaders:(p.loaders||[]).filter(l=> l!=="minecraft" && l!=="datapack"),
+      gameVersions:p.game_versions||[], loaders:withOculus((p.loaders||[]).filter(l=> l!=="minecraft" && l!=="datapack"), p.project_type==="shader"),
       links:{source:p.source_url, issues:p.issues_url, wiki:p.wiki_url},
       versions:[], versionsPromise: vp
     };
@@ -308,7 +310,7 @@ async function cfCategoryId(slug, kind){
 const CurseForge = {
   name:"CurseForge",
   async search({query, category, loader, gameVersion, sort, offset, limit, projectType}){
-    const kind = ["modpack","resourcepack","shader"].includes(projectType) ? projectType : "mod";
+    const kind = ["modpack","resourcepack","shader","datapack"].includes(projectType) ? projectType : "mod";
     // из «Общего каталога» приходит слаг категории Modrinth; на странице CurseForge, уже числовой id
     if(category && !/^\d+$/.test(category)){
       category = await cfCategoryId(category, kind);
@@ -719,7 +721,7 @@ class Translator {
   #waiting = new Map();        // ключ -> общий промис, чтобы одинаковый текст не уходил дважды
   #queue = [];
   #active = 0;
-  #max = 2;                    // одновременных запросов (каждый несёт до 8 текстов)
+  #max = 3;                    // одновременных запросов (каждый несёт до 8 текстов); вся страница переводится сразу, видимые карточки первыми
   #cooldownUntil = 0;
   #timer = null;
   #saveTimer = null;
@@ -755,12 +757,33 @@ class Translator {
     }, 2000);
   }
 
+  /* Прямой перевод одного текста в обход очереди и пачек: им добивают карточки, которые остались английскими.
+     Возвращает перевод или null; удачный результат попадает в общий кэш. */
+  #direct = new Map();
+  forceOne(text, lang){
+    const src = this.#norm(text);
+    const key = this.#key(src, lang);
+    if(this.#cache.has(key) && !this.#same(src, this.#cache.get(key))) return Promise.resolve(this.#cache.get(key));
+    if(this.#direct.has(key)) return this.#direct.get(key);
+    const pr = this.#translateLong(lang, src).then(t => {
+      if(t && !this.#same(src, t)){ this.#cache.set(key, t); this.#failedAt.delete(key); this.#scheduleSave(); return t; }
+      return null;
+    }).catch(() => null).finally(() => this.#direct.delete(key));
+    this.#direct.set(key, pr);
+    return pr;
+  }
+
   /* перевод уже есть (или нужно ли пробовать ещё раз): для повторных попыток карточек на экране */
   failed(text, lang){
     const key = this.#key(this.#norm(text), lang);
     return !this.#cache.has(key) && this.#failedAt.has(key);
   }
   #norm(text){ return String(text).replace(/\s+/g, " ").trim(); }
+  /* сервис вернул тот же английский текст: для длинной фразы это отказ (или неверно определённый язык), а не перевод */
+  #same(src, t){
+    const a = this.#norm(src), b = this.#norm(t);
+    return a.length >= 25 && a.split(" ").length >= 4 && a.toLowerCase() === b.toLowerCase();
+  }
 
   /* stale: функция «результат уже не нужен» (карточка исчезла), тогда запрос не отправляется;
      node: элемент, куда пойдёт перевод (видимые на экране переводятся первыми) */
@@ -769,7 +792,10 @@ class Translator {
     const src = this.#norm(text);
     if(!src) return Promise.resolve(text);
     const key = this.#key(src, lang);
-    if(this.#cache.has(key)) return Promise.resolve(this.#cache.get(key));
+    if(this.#cache.has(key)){
+      if(!this.#same(src, this.#cache.get(key))) return Promise.resolve(this.#cache.get(key));
+      this.#cache.delete(key);      // в кэш раньше попал непереведённый оригинал: переводим заново
+    }
     const failed = this.#failedAt.get(key);
     if(failed && Date.now() - failed < 3000) return Promise.resolve(text);
     return new Promise(resolve => {
@@ -780,7 +806,8 @@ class Translator {
   }
 
   #onScreen(node){
-    if(!node || !node.isConnected) return false;
+    if(!node) return true;                 // без привязки к элементу (не карточка) переводим сразу
+    if(!node.isConnected) return false;
     const r = node.getBoundingClientRect();
     return r.bottom > -150 && r.top < innerHeight + 450;
   }
@@ -793,7 +820,10 @@ class Translator {
       const batch = this.#takeBatch();
       if(!batch.length) break;
       this.#active++;
-      this.#translateBatch(batch).catch(()=>{}).finally(() => { this.#active--; this.#pump(); });
+      this.#translateBatch(batch).catch(()=>{}).finally(() => {
+        for(const j of batch){ if(this.#waiting.get(j.key)){ this.#failedAt.set(j.key, Date.now()); this.#waiting.delete(j.key); j.settle(j.original); } }
+        this.#active--; this.#pump();
+      });
     }
   }
 
@@ -831,18 +861,29 @@ class Translator {
       const parts = lines == null ? null : lines.split("\n").map(s => s.trim());
       // строки должны совпасть по числу и не быть пустыми, иначе пачка могла «съехать»: тогда переводим по одной
       if(parts && parts.length === batch.length && parts.every(Boolean)) out = parts;
+      else if(lines != null && parts && parts.length === batch.length){
+        // часть строк пустая: берём хорошие, остальные переведём отдельно ниже
+        out = parts.map(x => x || null);
+      }
     }
     if(!out){
       out = [];
       for(const j of batch){
         out.push(j.stale && j.stale() ? false : await this.#translateLong(lang, j.text));   // false: карточка ушла, ничего не запоминаем
       }
+    }else{
+      // строки пачки, которые пришли пустыми или совпали с оригиналом, переводим отдельно
+      for(let i = 0; i < batch.length; i++){
+        const j = batch[i];
+        if(out[i] && !this.#same(j.text, out[i])) continue;
+        out[i] = j.stale && j.stale() ? false : await this.#translateLong(lang, j.text);
+      }
     }
     batch.forEach((job, i) => {
       const t = out[i];
       if(t === false){
         // пропущено: запрос не отправлялся
-      }else if(t){
+      }else if(t && !this.#same(job.text, t)){
         this.#cache.set(job.key, t);
         this.#failedAt.delete(job.key);
       }else{
@@ -875,25 +916,62 @@ class Translator {
     return done.join(" ");
   }
 
-  /* перебор сервисов: у каждого свои лимиты, поэтому отказ одного не ломает перевод */
+  /* перебор сервисов: у каждого свои лимиты, поэтому отказ одного не ломает перевод.
+     Сервис, который ответил 429 или не отвечает, откладывается на растущее время (до 15 минут), чтобы не долбить
+     заблокированный адрес (от этого блокировка только затягивается) и сразу идти к рабочему. */
+  #bad = new Map(); #badN = new Map(); #lastNote = new Map();
+  static #NAMES = ["bing", "google", "googleWeb", "chromeExt", "lingva", "myMemory"];
+  /* все сервисы сейчас в «отдыхе»: безнадёжно спрашивать ещё раз прямо сейчас */
+  resting(){
+    const now = Date.now();
+    return Translator.#NAMES.every(n => (this.#bad.get(n) || 0) > now);
+  }
+  #note(key, msg){
+    // в translate.log (папка данных лаунчера) и в консоль; не чаще раза в 20 секунд на ключ
+    const now = Date.now();
+    if(now - (this.#lastNote.get(key) || 0) < 20000) return;
+    this.#lastNote.set(key, now);
+    try{ console.warn("[translate] " + msg); if(window.mm && window.mm.invoke) window.mm.invoke("tr:log", msg).catch(()=>{}); }catch(e){ /* лог не критичен */ }
+  }
   async #remote(lang, q){
-    const providers = [Translator.#google, Translator.#chromeExt];
-    if(q.length <= 450 && !q.includes("\n")) providers.push(Translator.#myMemory);
+    // [имя, сервис, сколько ждать мс]: в лаунчере первым идёт Microsoft (через основной процесс, без CORS и с точной пачкой),
+    // затем Google-варианты, затем запасные Lingva и MyMemory, которые принимают короткие куски и потому идут построчно
+    const providers = [
+      ["bing", Translator.#bing, 20000],
+      ["google", Translator.#google, 12000], ["googleWeb", Translator.#googleWeb, 12000], ["chromeExt", Translator.#chromeExt, 12000],
+      ["lingva", Translator.#perPiece(Translator.#lingva, 700), 40000],
+      ["myMemory", Translator.#perPiece(Translator.#myMemory, 450), 40000]
+    ];
+    const errs = [];
     for(let round = 1; round <= 2; round++){
-      for(const p of providers){
+      for(const [name, p, ms] of providers){
+        if((this.#bad.get(name) || 0) > Date.now()) continue;
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 12000);
+        const t = setTimeout(() => ctrl.abort(), ms);
         try{
           const r = await p(lang, q, ctrl.signal);
-          if(r) return r;
+          if(r){
+            this.#bad.delete(name); this.#badN.delete(name);
+            this.#note("ok:" + name, "работает: " + name);
+            return r;
+          }
+          // пусто: сервис не вернул перевод (или недоступен вне лаунчера), без штрафа
+          if(name !== "bing" || (window.mm && window.mm.invoke)) errs.push(name + ": пустой ответ");
         }catch(e){
-          if(e && e.busy) this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + 1200 * round);   // просят притормозить: пауза для всей очереди
+          const busy = !!(e && e.busy);
+          const n = (this.#badN.get(name) || 0) + 1; this.#badN.set(name, n);
+          this.#bad.set(name, Date.now() + (busy ? Math.min(900000, 60000 * 2 ** (n - 1)) : Math.min(120000, 15000 * n)));
+          errs.push(name + ": " + ((e && e.message) || e));
+          if(busy) this.#cooldownUntil = Math.max(this.#cooldownUntil, Date.now() + 2500 * round);   // просят притормозить: пауза для всей очереди
         }finally{
           clearTimeout(t);
         }
       }
       await new Promise(res => setTimeout(res, 500 * round));
     }
+    if(errs.length) this.#note("fail", "перевод не удался. " + errs.slice(-8).join("; "));
+    // один раз за пять минут: основной процесс проверяет каждый сервис отдельно и пишет итог в translate.log
+    try{ if(window.mm && window.mm.invoke) window.mm.invoke("tr:diag").catch(()=>{}); }catch(e){ /* диагностика не критична */ }
     return null;
   }
 
@@ -908,6 +986,75 @@ class Translator {
     const data = await r.json();
     const out = (data[0] || []).map(chunk => (chunk && chunk[0]) || "").join("");
     return out || null;
+  }
+  /* Microsoft Edge Translate через основной процесс лаунчера: работает, когда Google отвечает 429 или недоступен.
+     Строки приходят и уходят массивом, поэтому пачка не «съезжает». В браузере без лаунчера не используется. */
+  static async #bing(lang, q, signal){
+    const mm = window.mm;
+    if(!mm || !mm.invoke) return null;
+    const lines = q.split("\n");
+    const r = await Promise.race([
+      mm.invoke("tr:bing", { lang, texts: lines }),
+      new Promise((_, rej) => signal.addEventListener("abort", () => rej(new Error("aborted")), { once:true }))
+    ]);
+    if(!r) throw new Error("нет ответа от лаунчера");
+    if(!r.ok) throw new Error(r.error || "ошибка основного процесса");   // настоящая причина (сеть, 401 и т.д.) попадёт в translate.log
+    if(!Array.isArray(r.data) || r.data.length !== lines.length) throw new Error("ответ Microsoft не совпал по числу строк");
+    if(r.data.some((t, i) => lines[i].trim() && !t)) throw new Error("Microsoft вернул пустые строки");
+    return r.data.join("\n");
+  }
+  /* тот же сервис Google на другом адресе: у адресов отдельные счётчики запросов */
+  static async #googleWeb(lang, q, signal){
+    const p = new URLSearchParams({client:"gtx", sl:"auto", tl:lang, dt:"t"});
+    const r = await fetch(`https://translate.google.com/translate_a/single?${p}`, { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({q}), signal });
+    if(r.status === 429 || r.status >= 500){ const e = new Error("busy " + r.status); e.busy = true; throw e; }
+    if(!r.ok) throw new Error("translate failed " + r.status);
+    const data = await r.json();
+    return (data[0] || []).map(chunk => (chunk && chunk[0]) || "").join("") || null;
+  }
+  /* Lingva: открытый переводчик без ключа, несколько зеркал; принимает короткий текст в адресе */
+  static async #lingva(lang, q, signal){
+    let lastErr = null;
+    for(const host of ["https://lingva.ml", "https://lingva.lunar.icu", "https://translate.plausibility.cloud"]){
+      try{
+        const r = await fetch(`${host}/api/v1/auto/${lang}/${encodeURIComponent(q)}`, { signal });
+        if(r.status === 429){ const e = new Error("busy"); e.busy = true; throw e; }
+        if(!r.ok) throw new Error("translate failed " + r.status);
+        const data = await r.json();
+        if(data && typeof data.translation === "string" && data.translation.trim()) return data.translation;
+      }catch(e){ if(signal.aborted) throw e; lastErr = e; }
+    }
+    if(lastErr && lastErr.busy) throw lastErr;
+    return null;
+  }
+  /* обёртка: режет текст по строкам и предложениям на куски не длиннее max, переводит каждый и собирает обратно */
+  static #perPiece(fn, max){
+    const cut = line => {
+      if(line.length <= max) return [line];
+      const out = []; let cur = "";
+      for(const sent of line.split(/(?<=[.!?。])\s+/)){
+        for(const piece of (sent.length > max ? sent.match(new RegExp(".{1," + max + "}", "gs")) : [sent])){
+          if(cur && (cur + " " + piece).length > max){ out.push(cur); cur = piece; }
+          else cur = cur ? cur + " " + piece : piece;
+        }
+      }
+      if(cur) out.push(cur);
+      return out;
+    };
+    return async (lang, q, signal) => {
+      const lines = [];
+      for(const line of q.split("\n")){
+        if(!line.trim()){ lines.push(line); continue; }
+        const done = [];
+        for(const piece of cut(line)){
+          const r = await fn(lang, piece, signal);
+          if(!r) return null;
+          done.push(r.trim());
+        }
+        lines.push(done.join(" "));
+      }
+      return lines.join("\n");
+    };
   }
   static async #chromeExt(lang, q, signal){
     const p = new URLSearchParams({client:"dict-chrome-ex", sl:"auto", tl:lang, q});
@@ -932,7 +1079,7 @@ class Translator {
 }
 const translateText = (text, lang, stale, node)=> Translator.getInstance().translate(text, lang, stale, node);
 let translateEpoch = 0;   // растёт при каждой новой отрисовке страницы: карточки прошлой отрисовки уже не нужны
-const RETRY_DELAYS = [4000, 8000, 15000, 30000, 60000];   // паузы между повторами для карточки на экране
+const RETRY_DELAYS = [3000, 6000, 10000, 15000, 30000, 45000, 60000, 60000, 60000, 60000];   // паузы между повторами для карточки на экране
 function maybeTranslate(node, text){
   const lang = getLang();
   if(!lang || !text || !node) return;
@@ -940,6 +1087,8 @@ function maybeTranslate(node, text){
   // Карточку создают заранее и вставляют в страницу чуть позже, поэтому «не нужна» она только когда
   // уже не на экране после новой отрисовки страницы или так и не появилась за 15 секунд
   const born = Date.now(), epoch = translateEpoch;
+  node.__trSrc = text; node.__trLang = lang; node.__trBorn = born;
+  trPending.add(node);
   const stale = () => {
     if(node.isConnected) return false;
     return epoch !== translateEpoch || Date.now() - born > 15000;   // ушла со страницы (началась новая отрисовка) или так и не появилась
@@ -950,6 +1099,7 @@ function maybeTranslate(node, text){
       if(t && t !== text){
         node.textContent = t;
         node.classList.add("translated");
+        trPending.delete(node);
       }else if(Translator.getInstance().failed(text, lang) && attempt < RETRY_DELAYS.length){
         // сервис не ответил: пока карточка на экране, пробуем снова, с нарастающей паузой
         setTimeout(()=>{ if(node.isConnected && epoch === translateEpoch) run(attempt + 1); }, RETRY_DELAYS[attempt]);
@@ -958,6 +1108,30 @@ function maybeTranslate(node, text){
   };
   setTimeout(()=> run(0), 0);
 }
+
+/* Подстраховка: всё, что на экране осталось английским (очередь, пачка или повторы не справились),
+   каждые несколько секунд переводится напрямую, по одному тексту, всеми сервисами по очереди. */
+const trPending = new Set();
+const trOnScreen = n => { const r = n.getBoundingClientRect(); return r.bottom > -100 && r.top < innerHeight + 300; };
+setInterval(()=>{
+  let started = 0;
+  const pend = [...trPending].sort((a, b) => (b.isConnected && trOnScreen(b)) - (a.isConnected && trOnScreen(a)));
+  for(const node of pend){
+    if(!node.isConnected){ if(Date.now() - node.__trBorn > 20000) trPending.delete(node); continue; }
+    if(node.classList.contains("translated") || getLang() !== node.__trLang){ trPending.delete(node); continue; }
+    if(Translator.getInstance().resting()) break;   // все сервисы отдыхают после отказов: не добиваем их запросами
+    if(node.__trBusy || Date.now() - node.__trBorn < 8000 || Date.now() - (node.__trLast || 0) < 12000) continue;
+    if(started >= 2) break;
+    started++;
+    node.__trBusy = true; node.__trLast = Date.now();
+    Translator.getInstance().forceOne(node.__trSrc, node.__trLang).then(t=>{
+      node.__trBusy = false;
+      if(t && node.isConnected && !node.classList.contains("translated")){
+        node.textContent = t; node.classList.add("translated"); trPending.delete(node);
+      }
+    });
+  }
+}, 4000);
 
 /* ============================================================
    Карточка мода, общий рендер для всех страниц
@@ -1109,7 +1283,7 @@ function hydrateCover(m, el){
 }
 
 /* ---------- фильтры, выбранные в каталоге, применяются внутри карточек ---------- */
-const CATALOG_PAGES = ["mods","modpacks","plugins","resourcepacks","shaders"];
+const CATALOG_PAGES = ["mods","modpacks","plugins","resourcepacks","shaders","datapacks"];
 function activeFilters(){
   if(!catalog || !CATALOG_PAGES.includes(state.page)) return {gv:"", loader:"", q:""};
   return {gv:catalog.gv || "", loader:catalog.loader || "", q:catalog.q || ""};
@@ -1679,6 +1853,8 @@ async function openModal(m){
         <div class="spec"><span>Лицензия</span><b>${d.license || "-"}</b></div>
         ${m.kind === "resourcepack"
           ? `<div class="spec"><span>Разрешение</span><b>${(m.categories||[]).filter(c=>/^\d+x\+?$/.test(c)).join(", ") || "-"}</b></div>`
+          : m.kind === "datapack"
+          ? `<div class="spec"><span>Тип</span><b>Датапак</b></div>`
           : `<div class="spec ${(d.loaders||[]).length>1 ? "wide" : ""}"><span>${m.kind === "shader" ? "Движки" : "Загрузчики"}</span><b class="ld-list">${(d.loaders||[]).map(l=>`<span class="ld-chip">${ldIcon(l)}${LOADER_LABEL[l]||l}</span>`).join("") || "-"}</b></div>`}
       </div>
       ${(d.gameVersions||[]).length ? `<div><h4>Версии игры</h4><div class="vm-gv vm-gv-top" id="mGameVers">${modalGameVersionsHTML(d)}</div></div>` : ""}
@@ -1860,10 +2036,14 @@ const CATALOG_DEF = {
     keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
     projectType:"shader", kind:"shader", allSources:true, dynamicCats:true,
     categories:SHADER_CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
+  datapacks: {title:"Датапаки", lede:"Датапаки с Modrinth и CurseForge в одном списке. Скачиваются в отдельную папку datapacks выбранного экземпляра, кнопка с папкой открывает её",
+    keys:c=> window.mm && c.allSource!=="modrinth" ? (c.allSource==="curseforge" ? ["curseforge"] : ["modrinth","curseforge"]) : ["modrinth"],
+    projectType:"datapack", kind:"datapack", allSources:true, dynamicCats:true, folderSub:"datapacks",
+    categories:CAT_LABEL, showLoaders:false, showSource:false, versionServerSide:true},
   plugins:  {title:"Плагины", lede:"Плагины для серверов Paper и Spigot с Hangar и SpigotMC.", keys:(c)=> c.pluginSource==="both" ? ["hangar","spiget"] : [c.pluginSource], projectType:null, kind:"plugin",
     categories:PLUGIN_CAT_LABEL, showLoaders:false, showSource:true, versionServerSide:false}
 };
-const KIND_LABEL = {mod:"мода", modpack:"сборки", plugin:"плагина", resourcepack:"ресурспака", shader:"шейдера"};
+const KIND_LABEL = {mod:"мода", modpack:"сборки", plugin:"плагина", resourcepack:"ресурспака", shader:"шейдера", datapack:"датапака"};
 
 let catalog = null;   // состояние текущей страницы каталога
 let catController = null;
@@ -1900,6 +2080,7 @@ function renderCatalogPage(kind, opts){
           <button type="button" class="search-clear" id="qClear" aria-label="Очистить поиск" hidden>✕</button>
           <kbd class="search-kbd" aria-hidden="true">/</kbd>
         </label>
+        ${def.folderSub && window.mm ? `<button class="btn lc-folder lc-folder-sm" id="openPackFolder" type="button" title="Открыть папку датапаков экземпляра" aria-label="Открыть папку датапаков экземпляра"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6c.4 0 .8.2 1.1.5L11.7 7H19.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg></button>` : ""}
         <select id="gv" aria-label="Версия игры"><option value="">Любая версия</option></select>
         <select id="sort" aria-label="Сортировка">
           <option value="downloads">По загрузкам</option>
@@ -1959,6 +2140,7 @@ function renderCatalogPage(kind, opts){
   });
   paintView();
   $("openMrpack")?.addEventListener("click", ()=> window.LauncherUI?.installPackFile?.());
+  $("openPackFolder")?.addEventListener("click", ()=> window.LauncherUI?.openInstanceFolder?.(def.folderSub));
 
   const buildCats = async ()=>{
     const box = $("cats"); if(!box) return;
@@ -2045,7 +2227,7 @@ function renderCatalogPage(kind, opts){
   const runSearch = ()=>{ clearTimeout(debounce); catalog.q = qi.value.trim(); loadCatalog(); };
   syncClear();
   qi.addEventListener("input", ()=>{ syncClear(); clearTimeout(debounce); debounce = setTimeout(runSearch, 300); });
-  attachSuggest(qi, ()=> ({mods:"mod", modpacks:"modpack", resourcepacks:"resourcepack", shaders:"shader", plugins:"plugin"})[kind] || "mod");
+  attachSuggest(qi, ()=> ({mods:"mod", modpacks:"modpack", resourcepacks:"resourcepack", shaders:"shader", datapacks:"datapack", plugins:"plugin"})[kind] || "mod");
   qi.addEventListener("keydown", e=>{
     if(e.key === "Enter"){ e.preventDefault(); runSearch(); }
     if(e.key === "Escape" && qi.value){ e.preventDefault(); qClear.click(); }
@@ -2090,6 +2272,7 @@ function buildChips(container, values, key, clientOnly){
     b.addEventListener("click", ()=>{
       catalog[key] = v.value;
       container.querySelectorAll(".chip").forEach(c=> c.setAttribute("aria-pressed", String(c.dataset.value === v.value)));
+      if(key === "loader") window.LauncherUI?.presence?.();     // статус в Discord: установщик из фильтра
       // Modrinth (моды/сборки) фильтрует через серверный фасет, нужен новый запрос.
       // Hangar/SpigotMC не поддерживают этот фасет, фильтруем уже загруженный список на клиенте.
       if(clientOnly) renderCatalogGrid(); else loadCatalog();
@@ -2234,6 +2417,7 @@ const QUICK_ICONS = {
   modpacks: `<path d="M2 8l10-5 10 5-10 5z M2 12l10 5 10-5 M2 16l10 5 10-5"/>`,
   resourcepacks: `<path d="M3 5l7-2 5 3 6-2v15l-6 2-5-3-7 2z M10 3v15 M15 6v15"/>`,
   shaders: `<path d="M2 18l6-8 4 5 3-4 7 7z M14 5a3 3 0 1 0 6 0 3 3 0 0 0-6 0z M5 21h14"/>`,
+  datapacks: `<path d="M6 3h9l4 4v14H6z M15 3v4h4 M10.5 12l-2.5 2.5 2.5 2.5 M13.5 12l2.5 2.5-2.5 2.5"/>`,
   favorites: `<path d="M4 5h5l2 2h9v13H4z M12 10l1.2 2.2 2.5.5-1.8 1.8.3 2.5-2.2-1.1-2.2 1.1.3-2.5-1.8-1.8 2.5-.5z"/>`,
   servers: `<path d="M3 4h18v6H3z M3 14h18v6H3z M6 7h2 M6 17h2 M15 7h3 M15 17h3"/>`,
   settings: `<path d="M3 6h6m5 0h7 M3 12h12m5 0h1 M3 18h2m5 0h11 M9 4h5v4H9z M15 10h5v4h-5z M5 16h5v4H5z"/>`
@@ -2292,6 +2476,10 @@ function renderHome(){
       <button class="quick-card" data-page="shaders">
         <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.shaders}</svg></span>
         <span><b>Шейдеры</b><span>Освещение, тени и вода как в кино</span></span>
+      </button>
+      <button class="quick-card" data-page="datapacks">
+        <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.datapacks}</svg></span>
+        <span><b>Датапаки</b><span>Новые механики, крафты и структуры без модов</span></span>
       </button>
       <button class="quick-card" data-page="favorites">
         <span class="quick-icon"><svg viewBox="0 0 24 24">${QUICK_ICONS.favorites}</svg></span>
@@ -2390,7 +2578,7 @@ function renderFavoritesPage(){
   const col = favView === "all" ? null : collections.get(favView);
   const list = col ? everything.filter(m=> col.ids.includes(m.id)) : everything;
   const installable = list.filter(m=> (m.source==="modrinth" || m.source==="curseforge") && m.kind==="mod").length;
-  const dlable = list.filter(m=> (m.source==="modrinth" || m.source==="curseforge") && ["mod","resourcepack","shader"].includes(m.kind)).length;
+  const dlable = list.filter(m=> (m.source==="modrinth" || m.source==="curseforge") && ["mod","resourcepack","shader","datapack"].includes(m.kind)).length;
   const safe = cmEsc;
   // плашки создания сборки видны всегда, даже когда в избранном ещё ничего нет
   content.innerHTML = `
@@ -3100,12 +3288,13 @@ function renderServersPage(){
 /* ============================================================
    Навигация и каркас
    ============================================================ */
-const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", favorites:"Избранное", settings:"Настройки", servers:"Мониторинг"};
+const PAGE_TITLES = {home:"Главная", mods:"Моды", plugins:"Плагины", modpacks:"Сборки", resourcepacks:"Ресурспаки", shaders:"Шейдеры", datapacks:"Датапаки", favorites:"Избранное", settings:"Настройки", servers:"Мониторинг"};
 
 function setPage(page, opts){
   if(CATALOG_PAGES.includes(state.page)) saveCatalogState();   // запоминаем фильтры и страницу каталога, с которого уходим
   state.page = page;
   window.LauncherUI?.presence?.(page);
+  window.Mascot?.sync(page);
   document.body.classList.remove("lc-home");
   document.querySelectorAll(".nav-item").forEach(b=> b.classList.toggle("active", b.dataset.page===page));
   $("pageTitle").textContent = PAGE_TITLES[page] || "";

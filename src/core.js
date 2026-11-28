@@ -63,8 +63,29 @@ function init(root) {
   // всё, что осталось от прерванной или старой установки, убираем
   DIRS.installers = path.join(root, 'installers');
   DIRS.packs = path.join(root, 'packs');
-  for (const d of [DIRS.installers, DIRS.packs]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* занято, уберём в следующий раз */ } }
+  DIRS.parts = path.join(root, 'parts');   // недокачанные файлы экземпляров (моды, ресурспаки, шейдеры): в самих папках экземпляра .part не лежат
+  for (const d of [DIRS.installers, DIRS.packs, DIRS.parts]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* занято, уберём в следующий раз */ } }
   purgeTempInstances();
+  sweepAllInstanceParts();
+}
+/* Файл внутри папки экземпляров? Для таких загрузок временный .part кладём не рядом, а в DIRS.parts */
+function inInstances(file) {
+  if (!DIRS.instances) return false;
+  const rel = path.relative(DIRS.instances, file);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+function partPath(dest) {
+  if (!inInstances(dest)) return dest + '.part';
+  return path.join(DIRS.parts, crypto.createHash('sha1').update(path.resolve(dest)).digest('hex') + '.part');
+}
+/* Убрать «*.part» из папки (остатки старых версий лаунчера или аварийного закрытия). Папки экземпляра больше ничего временного не держат. */
+function sweepParts(dir) {
+  let names = []; try { names = fs.readdirSync(dir); } catch { return; }
+  for (const n of names) if (/\.(part|reuse)$/i.test(n)) { try { fs.rmSync(path.join(dir, n), { force: true }); } catch { /* занят, уберём в следующий раз */ } }
+}
+function sweepInstanceParts(id) { for (const sub of ['mods', 'resourcepacks', 'shaderpacks', 'datapacks']) sweepParts(path.join(instDir(id), sub)); }
+function sweepAllInstanceParts() {
+  try { for (const d of fs.readdirSync(DIRS.instances, { withFileTypes: true })) if (d.isDirectory()) sweepInstanceParts(d.name); } catch { /* не страшно */ }
 }
 /* временные экземпляры (их создаёт «Скачать всё → ZIP») живут только на время сборки архива; если лаунчер закрыли посреди работы, убираем остатки */
 function purgeTempInstances() {
@@ -219,7 +240,9 @@ async function download(url, dest, o = {}) {
   // такой же файл уже скачан для другой версии или Java: берём его, а не качаем заново
   if (o.sha1 && await reuseLocal(dest, o.sha1)) return 'reused';
   await fsp.mkdir(path.dirname(dest), { recursive: true });
-  const tmp = dest + '.part';
+  const tmp = partPath(dest);
+  const dropOnCancel = o.dropPartOnCancel || inInstances(dest);
+  await fsp.mkdir(path.dirname(tmp), { recursive: true });
   const job = jobs.getStore();
   let lastErr;
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -254,12 +277,21 @@ async function download(url, dest, o = {}) {
         await fsp.rm(tmp, { force: true });
         throw new Error(`Контрольная сумма не совпала: ${url}`);
       }
-      await fsp.rename(tmp, dest);
+      try { await fsp.rename(tmp, dest); }
+      catch (re) {
+        if (re && re.code !== 'EXDEV') throw re;   // другой диск: переименовать нельзя, копируем рядом и переименовываем уже там
+        const side = dest + '.reuse';
+        await fsp.copyFile(tmp, side); await fsp.rename(side, dest); await fsp.rm(tmp, { force: true });
+      }
       rememberSha1(o.sha1, dest);
       return 'downloaded';
     } catch (e) {
       clearTimeout(timer);
-      if (job && job.cancelled) throw new Error(CANCELLED);
+      if (job && job.cancelled) {
+        // пользователь отменил: недокачанный .part оставлять незачем (для модов он только мусорит в папке)
+        if (dropOnCancel) await fsp.rm(tmp, { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+        throw new Error(CANCELLED);
+      }
       lastErr = e;
       if (attempt < 5) await new Promise(res => setTimeout(res, 500 * attempt));
     } finally {
@@ -279,11 +311,12 @@ async function fetchModFile({ url, dest, sha1, size, file, isDep, report }) {
   report(`Скачиваю ${file}`, null, { ...base, received: 0, total: size || 0 });
   try {
     await download(url, dest, {
-      sha1, size,
+      sha1, size, dropPartOnCancel: true,
       onProgress: (got, total) => report(null, null, { ...base, received: got, total: total || size || 0 }),
       onVerify: () => report(null, null, { ...base, received: 1, total: 1, verifying: true })
     });
   } catch (e) {
+    if (e && String(e.message).includes(CANCELLED)) await fsp.rm(partPath(dest), { force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
     report(null, null, { ...base, received: 0, total: 0, error: true });
     throw e;
   }
@@ -1331,8 +1364,10 @@ async function installModFile({ instanceId, url, filename, title, slug, version 
 }
 
 /* ---------- ресурспаки и шейдеры: обычные .zip в resourcepacks / shaderpacks, загрузчик модов не нужен ---------- */
-const RES_DIR = { resourcepack: 'resourcepacks', shader: 'shaderpacks' };
-const resKind = k => { if (!RES_DIR[k]) throw new Error('Неизвестный тип: ожидался ресурспак или шейдер'); return k; };
+const RES_DIR = { resourcepack: 'resourcepacks', shader: 'shaderpacks', datapack: 'datapacks' };
+const RES_GEN = { resourcepack: 'ресурспака', shader: 'шейдера', datapack: 'датапака' };
+const RES_NOM = { resourcepack: 'Ресурспак', shader: 'Шейдер', datapack: 'Датапак' };
+const resKind = k => { if (!RES_DIR[k]) throw new Error('Неизвестный тип: ожидался ресурспак, шейдер или датапак'); return k; };
 
 function resFileName(filename, slug, version) {
   let name = path.basename(String(filename || '').replace(/\\/g, '/')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
@@ -1376,7 +1411,7 @@ async function installResourceFile({ instanceId, kind, url, filename, title, slu
 async function installResource({ instanceId, kind, source, slug, cfId }, report) {
   resKind(kind);
   const inst = getInstance(instanceId);
-  const label = kind === 'shader' ? 'шейдера' : 'ресурспака';
+  const label = RES_GEN[kind];
   const dir = path.join(instDir(inst.id), RES_DIR[kind]);
   await fsp.mkdir(dir, { recursive: true });
 
@@ -1458,12 +1493,18 @@ const DIS = '.disabled';
 function listMods(instanceId, opts = {}) {
   const inst = getInstance(instanceId);
   const dir = path.join(instDir(inst.id), 'mods');
+  sweepParts(dir);   // *.part в mods быть не должно
   let names = [];
   try { names = fs.readdirSync(dir); } catch { /* папки ещё нет */ }
   const on = names.filter(f => f.endsWith('.jar'));
   const off = opts.all ? names.filter(f => f.endsWith('.jar' + DIS)).map(f => f.slice(0, -DIS.length)).filter(f => !on.includes(f)) : [];
   const known = new Map((inst.mods || []).map(m => [m.file, m]));
-  const row = (f, enabled) => { const k = known.get(f) || {}; return { file: f, enabled, title: k.title || f, dependency: !!k.dependency, slug: k.slug || '', projectId: k.projectId || '', version: k.version || '' }; };
+  // когда файл появился в папке (для фильтра «недавно добавленные»); только для полного списка в настройках
+  const addedAt = (f, enabled) => {
+    if (!opts.all) return 0;
+    try { const st = fs.statSync(path.join(dir, enabled ? f : f + DIS)); return Math.round(st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs); } catch { return 0; }
+  };
+  const row = (f, enabled) => { const k = known.get(f) || {}; return { file: f, enabled, title: k.title || f, dependency: !!k.dependency, slug: k.slug || '', projectId: k.projectId || '', version: k.version || '', added: addedAt(f, enabled) }; };
   return on.map(f => row(f, true)).concat(off.map(f => row(f, false))).sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
 }
 
@@ -1489,6 +1530,7 @@ async function removeMod(instanceId, file) {
   if (path.basename(file) !== file) throw new Error('Некорректное имя файла');
   await fsp.rm(path.join(instDir(inst.id), 'mods', file), { force: true });
   await fsp.rm(path.join(instDir(inst.id), 'mods', file + DIS), { force: true });   // если мод был выключен
+  await fsp.rm(path.join(instDir(inst.id), 'mods', file + '.part'), { force: true }).catch(() => {});   // недокачанный остаток
   const all = loadInstances();
   const rec = all.find(i => i.id === inst.id);
   rec.mods = (rec.mods || []).filter(m => m.file !== file);
@@ -2101,10 +2143,10 @@ async function installMrpack(opts, report, onLog, onFile) {
 }
 
 /* ---------- CurseForge (API-ключ встроен: src/curseforge-key.js) ---------- */
-const CF = { base: 'https://api.curseforge.com/v1', game: 432, classMods: 6, classPacks: 4471, classResPacks: 12, classShaders: 6552 };
+const CF = { base: 'https://api.curseforge.com/v1', game: 432, classMods: 6, classPacks: 4471, classResPacks: 12, classShaders: 6552, classDataPacks: 6945 };
 /* раздел CurseForge по виду карточки: моды, сборки, ресурспаки (Texture Packs), шейдеры */
-const cfClass = kind => (kind === 'modpack' ? CF.classPacks : kind === 'resourcepack' ? CF.classResPacks : kind === 'shader' ? CF.classShaders : CF.classMods);
-const CF_PATH = { mod: 'mc-mods', modpack: 'modpacks', resourcepack: 'texture-packs', shader: 'shaders' };
+const cfClass = kind => (kind === 'modpack' ? CF.classPacks : kind === 'resourcepack' ? CF.classResPacks : kind === 'shader' ? CF.classShaders : kind === 'datapack' ? CF.classDataPacks : CF.classMods);
+const CF_PATH = { mod: 'mc-mods', modpack: 'modpacks', resourcepack: 'texture-packs', shader: 'shaders', datapack: 'data-packs' };
 const CF_LOADER = { forge: 1, fabric: 4, quilt: 5, neoforge: 6 };
 const CF_LOADER_NAME = { 1: 'forge', 4: 'fabric', 5: 'quilt', 6: 'neoforge' };
 const CF_SORT = { relevance: 2, downloads: 6, follows: 12, updated: 3, newest: 11 };
@@ -2866,7 +2908,7 @@ async function exportMrpack(id, dest, report, opts = {}) {
   // 1. содержимое: моды, ресурспаки, шейдеры (только файлы, выключенные моды пропускаются)
   const content = [];   // { rel, abs, sha1 }
   let disabled = 0;
-  for (const sub of ['mods', 'resourcepacks', 'shaderpacks']) {
+  for (const sub of ['mods', 'resourcepacks', 'shaderpacks', 'datapacks']) {
     let names = []; try { names = await fsp.readdir(path.join(dir, sub), { withFileTypes: true }); } catch { continue; }
     for (const d of names) {
       if (!d.isFile()) continue;
@@ -2954,10 +2996,10 @@ async function exportMrpack(id, dest, report, opts = {}) {
 }
 
 /* ---------- «Скачать всё» из избранного ----------
-   items: [{ kind: mod | resourcepack | shader, source: modrinth | curseforge, slug (у CurseForge это id проекта), title }].
-   Моды идут в mods (вместе с обязательными зависимостями), ресурспаки в resourcepacks, шейдеры в shaderpacks.
+   items: [{ kind: mod | resourcepack | shader | datapack, source: modrinth | curseforge, slug (у CurseForge это id проекта), title }].
+   Моды идут в mods (вместе с обязательными зависимостями), ресурспаки в resourcepacks, шейдеры в shaderpacks, датапаки в datapacks.
    Ошибка одной карточки не останавливает остальные: в ответе у каждой есть ok / error. */
-const BATCH_KINDS = new Set(['mod', 'resourcepack', 'shader']);
+const BATCH_KINDS = new Set(['mod', 'resourcepack', 'shader', 'datapack']);
 function batchItems(items) {
   const seen = new Set();
   return (Array.isArray(items) ? items : []).map(x => ({
@@ -2982,7 +3024,7 @@ async function installBatch({ instanceId, items }, report) {
   }
   for (let i = 0; i < res.length; i++) {
     const it = res[i];
-    report(`${it.kind === 'shader' ? 'Шейдер' : 'Ресурспак'} ${i + 1} из ${res.length}: ${it.title}`, (mods.length + i) / total);
+    report(`${RES_NOM[it.kind] || 'Файл'} ${i + 1} из ${res.length}: ${it.title}`, (mods.length + i) / total);
     try {
       checkCancel();
       await installResource({ instanceId, kind: it.kind, source: it.source, slug: it.slug, cfId: it.source === 'curseforge' ? it.slug : undefined },
@@ -3020,7 +3062,7 @@ async function downloadAllZip({ items, mc, loader, dest }, report) {
     checkCancel();
 
     const files = [];
-    for (const sub of ['mods', 'resourcepacks', 'shaderpacks']) {
+    for (const sub of ['mods', 'resourcepacks', 'shaderpacks', 'datapacks']) {
       let names = []; try { names = await fsp.readdir(path.join(dir, sub), { withFileTypes: true }); } catch { continue; }
       for (const d of names) if (d.isFile() && /\.(jar|zip)$/i.test(d.name)) files.push({ rel: `${sub}/${d.name}`, abs: path.join(dir, sub, d.name) });
     }
@@ -3031,7 +3073,7 @@ async function downloadAllZip({ items, mc, loader, dest }, report) {
     const readme = [
       'Собрано в MatrixL из избранного.',
       `Minecraft: ${mc}`, `Загрузчик: ${ld === 'vanilla' ? 'без модов' : ld}`, '',
-      'mods — моды (вместе с обязательными зависимостями), resourcepacks — ресурспаки, shaderpacks — шейдеры.',
+      'mods — моды (вместе с обязательными зависимостями), resourcepacks — ресурспаки, shaderpacks — шейдеры, datapacks — датапаки.',
       'Содержимое папок можно скопировать в папку .minecraft, в одноимённые папки.',
       ...(bad.length ? ['', `Не скачалось (${bad.length}):`, ...bad.map(b => `- ${b.title}: ${b.error}`)] : [])
     ].join('\r\n') + '\r\n';

@@ -98,6 +98,8 @@
 }
 .inst-strip .inst-tile{position:relative;border-radius:13px;transition:transform .3s var(--rd-spring),background .2s,border-color .2s,box-shadow .3s}
 .inst-strip .inst-tile:hover{transform:translateY(-4px)}
+/* лента с overflow обрезала поднявшийся при наведении квадрат (тонкая тёмная линия сверху): даём запас сверху, раскладку не сдвигаем */
+.inst-strip{padding-top:8px;margin-top:-6px}
 .inst-strip .inst-tile:active{transform:translateY(-1px) scale(.96)}
 .inst-strip .inst-tile[aria-selected="true"]{box-shadow:0 0 0 1px var(--accent) inset,0 12px 26px -12px color-mix(in srgb,var(--accent) 75%,transparent)}
 .inst-strip .inst-tile[aria-selected="true"]::after{

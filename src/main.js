@@ -84,26 +84,26 @@ const LD_NAME = { vanilla: 'Vanilla', fabric: 'Fabric', quilt: 'Quilt', forge: '
    Тексты на языке интерфейса лаунчера (RU / ENG), язык приходит из окна вместе со страницей. */
 const PRES = {
   ru: {
-    pages: { home: 'Главная', mods: 'Смотрит моды', plugins: 'Смотрит плагины', modpacks: 'Смотрит сборки', resourcepacks: 'Смотрит ресурспаки', shaders: 'Смотрит шейдеры', favorites: 'Смотрит избранное', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
-    viewing: { mod: 'Смотрит мод', plugin: 'Смотрит плагин', modpack: 'Смотрит сборку', resourcepack: 'Смотрит ресурспак', shader: 'Смотрит шейдер' }, author: a => `Автор: ${a}`,
-    tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
-    inLauncher: 'В лаунчере MatrixL', playing: v => `Играет в Minecraft ${v}`.trim(),
+    pages: { home: 'Главная', mods: 'Смотрит моды', plugins: 'Смотрит плагины', modpacks: 'Смотрит сборки', resourcepacks: 'Смотрит ресурспаки', shaders: 'Смотрит шейдеры', datapacks: 'Смотрит датапаки', favorites: 'Смотрит избранное', settings: 'Настройка лаунчера', servers: 'Мониторинг серверов' },
+    viewing: { mod: 'Смотрит мод', plugin: 'Смотрит плагин', modpack: 'Смотрит сборку', resourcepack: 'Смотрит ресурспак', shader: 'Смотрит шейдер', datapack: 'Смотрит датапак' }, author: a => `Автор: ${a}`,
+    tasks: { java: 'Обновление Java', mc: 'Установка Minecraft', pack: 'Установка сборки', mods: 'Установка модов', optifine: 'Установка OptiFine', resourcepack: 'Установка ресурспака', shader: 'Установка шейдера', datapack: 'Установка датапака', copy: 'Копирование экземпляра', export: 'Экспорт сборки' },
+    inLauncher: 'В лаунчере MatrixL', playing: (v, l) => `Играет в ${l || 'Minecraft'} ${v}`.trim(), launching: 'Запуск игры',
     favs: n => `${n} ${plural(n, 'карточка', 'карточки', 'карточек')} в избранном`,
     mods: n => `${n} ${plural(n, 'мод', 'мода', 'модов')}`
   },
   en: {
-    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', favorites: 'Browsing favorites', settings: 'Configuring the launcher', servers: 'Monitoring servers' },
-    viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader' }, author: a => `By ${a}`,
-    tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', copy: 'Copying an instance', export: 'Exporting a modpack' },
-    inLauncher: 'In MatrixL launcher', playing: v => `Playing Minecraft ${v}`.trim(),
+    pages: { home: 'Home', mods: 'Browsing mods', plugins: 'Browsing plugins', modpacks: 'Browsing modpacks', resourcepacks: 'Browsing resource packs', shaders: 'Browsing shaders', datapacks: 'Browsing data packs', favorites: 'Browsing favorites', settings: 'Configuring the launcher', servers: 'Monitoring servers' },
+    viewing: { mod: 'Viewing mod', plugin: 'Viewing plugin', modpack: 'Viewing modpack', resourcepack: 'Viewing resource pack', shader: 'Viewing shader', datapack: 'Viewing data pack' }, author: a => `By ${a}`,
+    tasks: { java: 'Updating Java', mc: 'Installing Minecraft', pack: 'Installing a modpack', mods: 'Installing mods', optifine: 'Installing OptiFine', resourcepack: 'Installing a resource pack', shader: 'Installing a shader', datapack: 'Installing a data pack', copy: 'Copying an instance', export: 'Exporting a modpack' },
+    inLauncher: 'In MatrixL launcher', playing: (v, l) => `Playing ${l || 'Minecraft'} ${v}`.trim(), launching: 'Launching the game',
     favs: n => `${n} saved ${n === 1 ? 'card' : 'cards'}`,
     mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`
   }
 };
-const PAGE_IDS = new Set(['home', 'mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'favorites', 'settings', 'servers']);
-const presence = { page: 'home', item: null, inst: null, favs: 0, gv: '', lang: 'ru', tasks: new Map(), playing: new Map() };
-const CATALOG_PAGES = new Set(['mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders']);
-const ITEM_KINDS = ['mod', 'plugin', 'modpack', 'resourcepack', 'shader'];
+const PAGE_IDS = new Set(['home', 'mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'datapacks', 'favorites', 'settings', 'servers']);
+const presence = { page: 'home', item: null, inst: null, favs: 0, gv: '', ld: '', lang: 'ru', tasks: new Map(), playing: new Map(), launching: new Map() };
+const CATALOG_PAGES = new Set(['mods', 'plugins', 'modpacks', 'resourcepacks', 'shaders', 'datapacks']);
+const ITEM_KINDS = ['mod', 'plugin', 'modpack', 'resourcepack', 'shader', 'datapack'];
 function plural(n, one, few, many) { const m = n % 100, d = n % 10; return (m > 10 && m < 15) ? many : d === 1 ? one : (d >= 2 && d <= 4) ? few : many; }
 function instLine(i) {
   if (!i) return undefined;
@@ -115,9 +115,13 @@ function applyPresence() {
   const start = o.showTimer ? startedAt : 0;
   if (presence.playing.size) {
     const g = [...presence.playing.values()].pop();
-    const d = g.live ? activity.describe(g.live, g.inst, o, Date.now(), lang) : { details: P.playing(g.mc), state: g.stateFor(lang) };
+    const d = g.live ? activity.describe(g.live, g.inst, o, Date.now(), lang) : { details: P.playing(g.mc, g.inst && g.inst.loader && g.inst.loader !== 'vanilla' ? LD_NAME[g.inst.loader] : ''), state: g.stateFor(lang) };
     rpc.set({ details: d.details, state: d.state || g.stateFor(lang), start: o.showTimer ? g.start : 0, largeText: d.largeText, party: d.party,
       serverIcon: d.iconHost ? serverping.iconUrl(d.iconHost) : '', serverText: d.iconText });
+  } else if (presence.launching.size) {
+    // игра запускается: проверка файлов, Java, старт процесса (до появления окна игры)
+    const l = [...presence.launching.values()].pop();
+    rpc.set({ details: P.launching, state: `${l.name} · ${l.ver}`, start: o.showTimer ? l.start : 0 });
   } else if (presence.tasks.size) {
     rpc.set({ details: P.tasks[[...presence.tasks.values()].pop()] || P.tasks.mods, state: instLine(presence.inst), start });
   } else if (!o.showLauncher) {
@@ -131,8 +135,11 @@ function applyPresence() {
       details = `${P.viewing[it.kind] || P.viewing.mod}: ${it.title}`;
       state = it.author ? P.author(it.author) : undefined;
     }
-    // каталоги: одна строка «Смотрит моды | 1.12.2», версия видна только если выбрана в фильтре
-    else if (CATALOG_PAGES.has(presence.page)) { if (presence.gv) details += ` | ${presence.gv}`; }
+    // каталоги: одна строка «Смотрит моды | 1.12.2 | NeoForge»: версия и установщик видны, только если выбраны в фильтре
+    else if (CATALOG_PAGES.has(presence.page)) {
+      if (presence.gv) details += ` | ${presence.gv}`;
+      if (presence.ld) details += ` | ${LD_NAME[presence.ld] || presence.ld.charAt(0).toUpperCase() + presence.ld.slice(1)}`;
+    }
     else if (presence.page === 'home') state = instLine(presence.inst);
     else if (presence.page === 'favorites' && presence.favs) state = P.favs(presence.favs);
     rpc.set({ details, state, start });
@@ -235,6 +242,141 @@ function registerIpc() {
   /* --- своя шапка окна: «свернуть», «развернуть» и «закрыть» --- */
   handle('win:toggle', () => { if (!win) return false; if (win.isMaximized()) win.unmaximize(); else win.maximize(); return win.isMaximized(); });
   handle('win:state', () => !!win && win.isMaximized());
+
+  /* ---------- перевод описаний через Microsoft (запрос идёт из основного процесса: без CORS и лимитов страницы) ----------
+     Два маршрута, лаунчер сам переключается на рабочий:
+       edge: токен Edge Translate (раньше работало без ключа, у некоторых адресов теперь 404);
+       web:  веб-переводчик bing.com/translator (страница отдаёт одноразовые key/token, как для обычного посетителя).
+     Тексты приходят массивом, переводы возвращаются массивом в том же порядке. */
+  const UA_WEB = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
+  const trWhy = e => { const c = e && e.cause; return ((e && e.message) || String(e)) + (c ? ' (' + (c.code || c.message || c) + ')' : ''); };
+  let trRoute = 'edge';
+
+  let trTok = null, trTokAt = 0;
+  const trToken = async force => {
+    if (!force && trTok && Date.now() - trTokAt < 8 * 60 * 1000) return trTok;
+    const r = await fetch('https://edge.microsoft.com/translate/auth', { headers: { 'User-Agent': UA_WEB }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error('edge auth ' + r.status);
+    trTok = (await r.text()).trim(); trTokAt = Date.now();
+    if (!trTok) throw new Error('edge auth: пустой токен');
+    return trTok;
+  };
+  const trEdge = async (to, list) => {
+    const body = JSON.stringify(list.map(Text => ({ Text })));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const tok = await trToken(attempt > 0);
+      const r = await fetch('https://api-edge.cognitive.microsofttranslator.com/translate?from=&to=' + encodeURIComponent(to) + '&api-version=3.0&includeSentenceLength=true', {
+        method: 'POST', body, signal: AbortSignal.timeout(15000),
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok, 'User-Agent': UA_WEB }
+      });
+      if (r.status === 401 && attempt === 0) continue;   // токен протух: берём новый и повторяем
+      if (!r.ok) throw new Error('edge translate ' + r.status);
+      const data = await r.json();
+      return list.map((_, i) => (data[i] && data[i].translations && data[i].translations[0] && data[i].translations[0].text) || '');
+    }
+    throw new Error('edge translate failed');
+  };
+
+  let trWebSess = null, trWebLoading = null;
+  // параллельные запросы ждут одну и ту же загрузку страницы, а не открывают её каждый
+  const trWebInit = () => {
+    if (trWebSess && Date.now() - trWebSess.at < 15 * 60 * 1000) return Promise.resolve(trWebSess);
+    if (!trWebLoading) trWebLoading = trWebLoad().finally(() => { trWebLoading = null; });
+    return trWebLoading;
+  };
+  const trWebLoad = async () => {
+    const r = await fetch('https://www.bing.com/translator', { headers: { 'User-Agent': UA_WEB, 'Accept-Language': 'en-US,en;q=0.9' }, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error('bing page ' + r.status);
+    const html = await r.text();
+    const ig = (html.match(/IG:"([^"]+)"/) || [])[1];
+    const iid = (html.match(/data-iid="([^"]+)"/) || [])[1] || 'translator.5025';
+    const h = html.match(/params_AbusePreventionHelper\s*=\s*\[\s*(\d+)\s*,\s*"([^"]+)"/);
+    if (!ig || !h) throw new Error('bing page: не найдены key/token (' + html.length + ' байт)');
+    const cookie = (r.headers.getSetCookie ? r.headers.getSetCookie() : []).map(c => c.split(';')[0]).join('; ');
+    trWebSess = { ig, iid, key: h[1], token: h[2], cookie, at: Date.now(), n: 0 };
+    return trWebSess;
+  };
+  const trWebOne = async (to, text) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const ss = await trWebInit();
+      const url = 'https://www.bing.com/ttranslatev3?isVertical=1&IG=' + ss.ig + '&IID=' + encodeURIComponent(ss.iid + '.' + (++ss.n));
+      const r = await fetch(url, {
+        method: 'POST', signal: AbortSignal.timeout(15000),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA_WEB, Referer: 'https://www.bing.com/translator', ...(ss.cookie ? { Cookie: ss.cookie } : {}) },
+        body: new URLSearchParams({ fromLang: 'auto-detect', text, to, token: ss.token, key: ss.key, tryFetchingGenderDebiasedTranslations: 'true' }).toString()
+      });
+      if (!r.ok) { trWebSess = null; if (attempt === 0) continue; throw new Error('bing web ' + r.status); }
+      const data = await r.json().catch(() => null);
+      const out = Array.isArray(data) && data[0] && data[0].translations && data[0].translations[0] && data[0].translations[0].text;
+      if (!out) { trWebSess = null; if (attempt === 0) continue; throw new Error('bing web: ' + (data && data.statusCode ? 'статус ' + data.statusCode : 'пустой ответ')); }
+      return out;
+    }
+  };
+  // веб-версия берёт до ~1000 знаков за раз: длинную строку режем по предложениям
+  const trWebLine = async (to, line) => {
+    if (!line.trim()) return line;
+    if (line.length <= 900) return trWebOne(to, line);
+    const parts = []; let cur = '';
+    for (const sent of line.split(/(?<=[.!?。])\s+/)) {
+      for (const piece of (sent.length > 900 ? sent.match(/.{1,900}/gs) : [sent])) {
+        if (cur && (cur + ' ' + piece).length > 900) { parts.push(cur); cur = piece; } else cur = cur ? cur + ' ' + piece : piece;
+      }
+    }
+    if (cur) parts.push(cur);
+    const done = []; for (const p of parts) done.push(await trWebOne(to, p));
+    return done.join(' ');
+  };
+  const trWeb = async (to, list) => {
+    const out = new Array(list.length); let next = 0;
+    const worker = async () => { while (next < list.length) { const i = next++; out[i] = await trWebLine(to, list[i]); } };
+    await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
+    return out;
+  };
+
+  const trBing = async ({ lang, texts } = {}) => {
+    const to = String(lang || '').replace(/[^A-Za-z-]/g, '').slice(0, 8);
+    const list = Array.isArray(texts) ? texts.map(t => String(t == null ? '' : t)).slice(0, 25) : [];
+    if (!to || !list.length) return [];
+    const errs = [];
+    for (const route of (trRoute === 'web' ? ['web', 'edge'] : ['edge', 'web'])) {
+      try {
+        const out = route === 'edge' ? await trEdge(to, list) : await trWeb(to, list);
+        if (out.some((t, i) => list[i].trim() && !t)) throw new Error('пустые строки в ответе');
+        trRoute = route; return out;
+      } catch (e) { errs.push(route + ': ' + trWhy(e)); }
+    }
+    throw new Error(errs.join(' | '));
+  };
+
+  /* translate.log в папке данных: какие сервисы перевода отвечают, а какие нет (пишет страница, см. Translator) */
+  handle('tr:log', msg => {
+    const f = path.join(app.getPath('userData'), 'translate.log');
+    try { if (fs.existsSync(f) && fs.statSync(f).size > 200 * 1024) fs.writeFileSync(f, '', 'utf8'); } catch { /* не критично */ }
+    fs.appendFileSync(f, `${new Date().toISOString()} ${String(msg).slice(0, 600)}\n`, 'utf8');
+    return true;
+  });
+  handle('tr:bing', async args => { try { return await trBing(args); } catch (e) { throw new Error(trWhy(e)); } });
+  /* проверка всех сервисов перевода из основного процесса: коротко пишет в translate.log, кто и что отвечает */
+  let trDiagAt = 0;
+  handle('tr:diag', async () => {
+    if (Date.now() - trDiagAt < 5 * 60 * 1000) return false;
+    trDiagAt = Date.now();
+    const t = (name, fn) => Promise.race([fn(), new Promise((_, no) => setTimeout(() => no(new Error('таймаут 15с')), 15000))])
+      .then(r => name + ': ' + r, e => name + ': ОШИБКА ' + trWhy(e));
+    const get = async (url, opt) => { const r = await fetch(url, { signal: AbortSignal.timeout(9000), headers: { 'User-Agent': UA_WEB }, ...opt }); const b = await r.text(); return r.status + ' ' + b.slice(0, 40).replace(/\s+/g, ' '); };
+    const rows = await Promise.all([
+      t('edge-auth', () => get('https://edge.microsoft.com/translate/auth')),
+      t('bing-страница', async () => { trWebSess = null; const s = await trWebInit(); return 'ok, key/token найдены'; }),
+      t('bing-веб-перевод', async () => (await trWeb('ru', ['Hello world, this is a test.']))[0]),
+      t('итог-Microsoft', async () => (await trBing({ lang: 'ru', texts: ['Memory usage optimizations'] }))[0] + ' [маршрут ' + trRoute + ']'),
+      t('google-gtx', () => get('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=hello')),
+      t('mymemory', () => get('https://api.mymemory.translated.net/get?q=hello&langpair=en|ru')),
+      t('internet', () => get('https://github.com'))
+    ]);
+    const f = path.join(app.getPath('userData'), 'translate.log');
+    fs.appendFileSync(f, `${new Date().toISOString()} ПРОВЕРКА СЕРВИСОВ\n  ${rows.join('\n  ')}\n`, 'utf8');
+    return rows;
+  });
   handle('win:close', () => { if (win) win.close(); });
   handle('win:minimize', () => { if (win) win.minimize(); });
 
@@ -266,9 +408,10 @@ function registerIpc() {
     return { ...r, discordBuiltIn: !!DISCORD_APP_ID, discordConnected: rpc.active };
   });
   // интерфейс сообщает, на какой странице пользователь
-  handle('discord:page', ({ page, inst, favs, gv, lang, item } = {}) => {
+  handle('discord:page', ({ page, inst, favs, gv, ld, lang, item } = {}) => {
     presence.item = item && item.title ? { title: String(item.title).slice(0, 80), kind: ITEM_KINDS.includes(item.kind) ? item.kind : 'mod', author: item.author ? String(item.author).slice(0, 40) : '' } : null;
     presence.gv = gv ? String(gv).slice(0, 20) : '';
+    presence.ld = ld && /^[a-z0-9_-]{1,20}$/i.test(String(ld)) ? String(ld).toLowerCase() : '';
     presence.lang = activity.langOf(lang);
     presence.page = PAGE_IDS.has(page) ? page : 'home';
     presence.inst = inst && inst.name ? { name: String(inst.name).slice(0, 40), mc: String(inst.mc || ''), loader: String(inst.loader || '') } : null;
@@ -346,6 +489,10 @@ function registerIpc() {
     const inst = core.getInstance(id);
     if (busy.has('java')) throw new Error('Идёт обновление Java, дождитесь окончания');
     const release = lock(id);
+    // в Discord сразу видно, что игра запускается (до появления окна Minecraft)
+    const launchKey = ++taskSeq;
+    presence.launching.set(launchKey, { name: inst.name, ver: `${inst.loader && inst.loader !== 'vanilla' ? (LD_NAME[inst.loader] || inst.loader) : 'Minecraft'} ${inst.mc}`, start: Date.now() });
+    applyPresence();
     try {
       const account = await accounts.accountForLaunch();
       const llog = new LaunchLog({ gameDir: core.instDir(id), info: { launcher: 'v' + app.getVersion(), name: inst.name, mc: inst.mc, loader: inst.loader, loaderVersion: inst.loaderVersion } });
@@ -410,7 +557,7 @@ function registerIpc() {
       applyPresence();
       send('progress', { key: 'launch:' + id, text: 'Запуск игры…', pct: 1 });
       return res;
-    } finally { release(); }
+    } finally { release(); presence.launching.delete(launchKey); applyPresence(); }
   });
   /* показать в проводнике файл отчёта (или журнала) последнего падения: путь берётся только из памяти, не из окна */
   handle('crash:reveal', () => {
@@ -421,7 +568,7 @@ function registerIpc() {
   handle('inst:folder', async arg => {
     const { id, sub } = typeof arg === 'string' ? { id: arg } : (arg || {});
     core.getInstance(id);
-    const dir = sub === 'screenshots' || sub === 'mods' ? path.join(core.instDir(id), sub) : core.instDir(id);
+    const dir = sub === 'screenshots' || sub === 'mods' || sub === 'datapacks' ? path.join(core.instDir(id), sub) : core.instDir(id);
     fs.mkdirSync(dir, { recursive: true });
     const err = await shell.openPath(dir);
     if (err) throw new Error(err);
@@ -501,8 +648,8 @@ function registerIpc() {
     try { shell.showItemInFolder(dest); } catch { /* проводник не открылся, архив всё равно готов */ }
     return res;
   });
-  /* --- ресурспаки и шейдеры: в resourcepacks / shaderpacks выбранного экземпляра (любой загрузчик, в том числе Vanilla) --- */
-  const resTask = kind => (kind === 'shader' ? 'shader' : 'resourcepack');
+  /* --- ресурспаки, шейдеры и датапаки: в resourcepacks / shaderpacks / datapacks выбранного экземпляра (любой загрузчик, в том числе Vanilla) --- */
+  const resTask = kind => (kind === 'shader' ? 'shader' : kind === 'datapack' ? 'datapack' : 'resourcepack');
   handle('res:install', async ({ instanceId, kind, slug, source, cfId, taskId }) => {
     const release = lockMods(instanceId);
     try {

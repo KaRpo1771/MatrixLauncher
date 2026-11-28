@@ -33,7 +33,7 @@ function biomeName(id, lang) {
 /* ---------- Тексты статуса на двух языках (язык берётся из настройки интерфейса лаунчера) ---------- */
 const TXT = {
   ru: {
-    playing: v => `Играет в Minecraft ${v}`.trim(), mainMenu: 'Главное меню', afkMenu: 'Отсутствует (АФК) · главное меню',
+    playing: (v, l) => `Играет в ${l || 'Minecraft'} ${v}`.trim(), mainMenu: 'Главное меню', afkMenu: 'Отсутствует (АФК) · Главное меню',
     single: 'Одиночная игра', singleIn: n => `Одиночная игра · ${n}`, loading: 'Загрузка мира…',
     multi: 'Мультиплеер', onServer: 'Играет на сервере', onServerHost: h => `Сервер: ${h}`, inGame: 'В игре',
     mods: n => { const m = n % 100, d = n % 10; return `${n} ${(m > 10 && m < 15) ? 'модов' : d === 1 ? 'мод' : (d >= 2 && d <= 4) ? 'мода' : 'модов'}`; },
@@ -43,7 +43,7 @@ const TXT = {
     place: { nether: 'Нижний мир', end: 'Край', caves: 'Пещеры', deep_dark: 'Глубокая тьма', ocean: 'Океан', depths: 'Глубины', mountains: 'Горы', overworld: 'Верхний мир' }
   },
   en: {
-    playing: v => `Playing Minecraft ${v}`.trim(), mainMenu: 'Main menu', afkMenu: 'Away (AFK) · main menu',
+    playing: (v, l) => `Playing ${l || 'Minecraft'} ${v}`.trim(), mainMenu: 'Main menu', afkMenu: 'Away (AFK) · Main menu',
     single: 'Singleplayer', singleIn: n => `Singleplayer · ${n}`, loading: 'Loading world…',
     multi: 'Multiplayer', onServer: 'Playing on a server', onServerHost: h => `Server: ${h}`, inGame: 'In game',
     mods: n => `${n} ${n === 1 ? 'mod' : 'mods'}`,
@@ -141,11 +141,13 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   const LOADERS = { fabric: 'Fabric', quilt: 'Quilt', forge: 'Forge', neoforge: 'NeoForge' };
   const largeText = inst && mc
     ? `${LOADERS[inst.loader] || 'Minecraft'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : 'MatrixL';
-  // «Forge 1.12.2 (89 модов)», для чистой игры «Vanilla 1.20.1»: показывается на сервере рядом со статусом
+  // загрузчик (Forge, Fabric…) показываем всегда; слово «Minecraft» только для чистой игры без загрузчика
+  const ldName = inst && inst.loader && inst.loader !== 'vanilla' ? (LOADERS[inst.loader] || inst.loader) : '';
+  // «Forge 1.12.2 (89 модов)», для чистой игры «Minecraft 1.20.1»: показывается рядом со статусом (меню, одиночная игра, сервер)
   const verLabel = inst && mc
-    ? `${inst.loader && inst.loader !== 'vanilla' ? (LOADERS[inst.loader] || inst.loader) : 'Vanilla'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : '';
+    ? `${ldName || 'Minecraft'} ${mc}${inst.modCount > 0 ? ` (${T.mods(inst.modCount)})` : ''}` : '';
   if (!live || live.mode === 'menu' || !live.mode) {
-    return { details: T.playing(mc), state: o.showAfk && live && live.afk ? T.afkMenu : T.mainMenu, largeText };
+    return { details: T.playing(mc, ldName), state: o.showAfk && live && live.afk ? T.afkMenu : T.mainMenu, largeText };
   }
   if (live.mode === 'server') {
     const srv = live.srv || {};
@@ -165,7 +167,7 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   // одиночная игра
   const w = live.world;
   const details = o.showWorld && w && w.name ? T.singleIn(w.name) : T.single;
-  if (!w) return { details, state: o.showAfk && live.afk ? T.afk : T.loading, largeText };
+  if (!w) return { details, state: [verLabel, o.showAfk && live.afk ? T.afk : T.loading].filter(Boolean).join(' · '), largeText };
   const parts = [];
   const st = statusLabel(w, live, o, now, lang);
   if (st) parts.push(st);
@@ -178,7 +180,8 @@ function describe(live, inst, opts, now = Date.now(), lang = 'ru') {
   const sk = o.showWeather ? sky(w, lang) : '';
   if (sk) parts.push(sk);
   if (o.showCoords && w.pos) parts.push(`${Math.round(w.pos[0])} ${Math.round(w.pos[1])} ${Math.round(w.pos[2])}`);
-  return { details, state: parts.length ? parts.join(' · ') : T.inGame, largeText };
+  // версия и загрузчик идут первыми, как и на сервере
+  return { details, state: [verLabel, parts.length ? parts.join(' · ') : T.inGame].filter(Boolean).join(' · '), largeText };
 }
 
 /* Из заголовка окна Minecraft: в каком режиме игра */
